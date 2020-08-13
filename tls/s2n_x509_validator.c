@@ -29,9 +29,7 @@
 #include <openssl/err.h>
 #include <openssl/asn1.h>
 
-#if !defined(OPENSSL_IS_BORINGSSL)
-#include <openssl/ocsp.h>
-#endif
+#include "s2n-ocsp.h"
 
 /* our friends at openssl love to make backwards incompatible changes */
 #if !defined(LIBRESSL_VERSION_NUMBER) && S2N_OPENSSL_VERSION_AT_LEAST(1, 1, 0)
@@ -395,6 +393,7 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(
 
     OCSP_RESPONSE *ocsp_response = NULL;
     OCSP_BASICRESP *basic_response = NULL;
+    STACK_OF(X509) *certs = NULL;
 
     s2n_cert_validation_code ret_val = S2N_CERT_ERR_INVALID;
 
@@ -408,24 +407,25 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(
         goto clean_up;
     }
 
-    int ocsp_status = OCSP_response_status(ocsp_response);
+    int64_t ocsp_status;
+    GUARD(OCSP_response_status(ocsp_response, &ocsp_status));
 
     if (ocsp_status != OCSP_RESPONSE_STATUS_SUCCESSFUL) {
         goto clean_up;
     }
 
-    basic_response = OCSP_response_get1_basic(ocsp_response);
+    GUARD(OCSP_response_get1_basic(ocsp_response, &basic_response));
     if (!basic_response) {
         goto clean_up;
     }
 
     int i;
-
     int certs_in_chain = sk_X509_num(validator->cert_chain);
-    int certs_in_ocsp = sk_X509_num(OCSP_GET_CERTS(basic_response));
+    OCSP_resp_get0_certs(basic_response, &certs);
+    int certs_in_ocsp = sk_X509_num(certs);
 
     if (certs_in_chain >= 2 && certs_in_ocsp >= 1) {
-        X509 *responder = sk_X509_value(OCSP_GET_CERTS(basic_response), certs_in_ocsp - 1);
+        X509 *responder = sk_X509_value(certs, certs_in_ocsp - 1);
 
         /*check to see if one of the certs in the chain is an issuer of the cert in the ocsp response.*/
         /*if so it needs to be added to the OCSP verification chain.*/
@@ -441,25 +441,32 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(
         }
     }
 
+
     int ocsp_verify_err = OCSP_basic_verify(basic_response, validator->cert_chain, validator->trust_store->trust_store, 0);
     /* do the crypto checks on the response.*/
-    if (!ocsp_verify_err) {
+    if (ocsp_verify_err) {
         ret_val = S2N_CERT_ERR_EXPIRED;
         goto clean_up;
     }
 
+
+    //printf("fsljfdsaklf");
+    int single_response_count;
+    GUARD(OCSP_resp_count(basic_response, &single_response_count));
     /* for each response check the timestamps and the status. */
-    for (i = 0; i < OCSP_resp_count(basic_response); i++) {
+    for (i = 0; i < single_response_count; i++) {
         int status_reason;
         ASN1_GENERALIZEDTIME *revtime, *thisupd, *nextupd;
 
-        OCSP_SINGLERESP *single_response = OCSP_resp_get0(basic_response, i);
+        OCSP_SINGLERESP *single_response;
+        GUARD(OCSP_resp_get0(basic_response, i, &single_response));
         if (!single_response) {
             goto clean_up;
         }
 
-        ocsp_status = OCSP_single_get0_status(single_response, &status_reason, &revtime,
-                                              &thisupd, &nextupd);
+        int single_ocsp_status;
+        GUARD(OCSP_single_get0_status(single_response, &single_ocsp_status, &status_reason, &revtime,
+                                              &thisupd, &nextupd));
 
         uint64_t this_update = 0;
         s2n_result thisupd_result = s2n_asn1_time_to_nano_since_epoch_ticks((const char *) thisupd->data,
@@ -487,7 +494,7 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(
             goto clean_up;
         }
 
-        switch (ocsp_status) {
+        switch (single_ocsp_status) {
             case V_OCSP_CERTSTATUS_GOOD:
                 break;
 
@@ -512,8 +519,9 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(
     if (ocsp_response) {
         OCSP_RESPONSE_free(ocsp_response);
     }
-
     return ret_val;
+
+    return S2N_CERT_ERR_UNTRUSTED;
 #endif /* S2N_OCSP_STAPLING_SUPPORTED */
 }
 
