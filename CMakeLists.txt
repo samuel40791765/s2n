@@ -248,14 +248,18 @@ if (__RESTRICT__SUPPORTED)
 endif()
 
 set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules)
+set(s2n-ocsp_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libcrypto-build/s2n-ocsp-install/lib/s2n-ocsp/cmake)
 
+find_package(s2n-ocsp REQUIRED)
 find_package(LibCrypto REQUIRED)
-target_link_libraries(${PROJECT_NAME} PUBLIC LibCrypto::Crypto ${OS_LIBS} m)
-
+target_link_libraries(${PROJECT_NAME} PUBLIC LibCrypto::Crypto AWS::s2n-ocsp ${OS_LIBS} m)
+#target_link_libraries(${PROJECT_NAME} PUBLIC LibCrypto::Crypto ${OS_LIBS} m)
 target_include_directories(${PROJECT_NAME} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
 target_include_directories(${PROJECT_NAME} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api> $<INSTALL_INTERFACE:include>)
 
 target_include_directories(${PROJECT_NAME} PRIVATE $<TARGET_PROPERTY:LibCrypto::Crypto,INTERFACE_INCLUDE_DIRECTORIES>)
+
+
 
 include(CTest)
 if (BUILD_TESTING)

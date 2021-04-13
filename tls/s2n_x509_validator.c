@@ -30,9 +30,12 @@
 #include <openssl/asn1.h>
 #include <openssl/x509.h>
 
-#if !defined(OPENSSL_IS_BORINGSSL) && !defined(OPENSSL_IS_AWSLC)
-#include <openssl/ocsp.h>
-#endif
+#include "s2n-ocsp.h"
+// =======
+// #if !defined(OPENSSL_IS_BORINGSSL) && !defined(OPENSSL_IS_AWSLC)
+// #include <openssl/ocsp.h>
+// #endif
+// >>>>>>> main
 
 #ifndef X509_V_FLAG_PARTIAL_CHAIN
 #define X509_V_FLAG_PARTIAL_CHAIN 0x80000
@@ -414,17 +417,27 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(
         goto clean_up;
     }
 
-    int ocsp_status = OCSP_response_status(ocsp_response);
+    int64_t ocsp_status;
+    GUARD(OCSP_response_status(ocsp_response, &ocsp_status));
 
     if (ocsp_status != OCSP_RESPONSE_STATUS_SUCCESSFUL) {
         goto clean_up;
     }
 
-    basic_response = OCSP_response_get1_basic(ocsp_response);
+    GUARD(OCSP_response_get1_basic(ocsp_response, &basic_response));
     if (!basic_response) {
         goto clean_up;
     }
 
+// <<<<<<< ocsp-link
+//     int i;
+//     int certs_in_chain = sk_X509_num(validator->cert_chain);
+//     OCSP_resp_get0_certs(basic_response, &certs);
+//     int certs_in_ocsp = sk_X509_num(certs);
+
+//     if (certs_in_chain >= 2 && certs_in_ocsp >= 1) {
+//         X509 *responder = sk_X509_value(certs, certs_in_ocsp - 1);
+// =======
     /* X509_STORE_CTX_get0_chain() is better because it doesn't return a copy. But it's not available for Openssl 1.0.2.
      * Therefore, we call this variant and clean it up at the end of the function.
      * See the comments here:
@@ -436,6 +449,7 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(
     }
 
     const int certs_in_chain = sk_X509_num(cert_chain);
+// >>>>>>> main
 
     if (!certs_in_chain) {
         goto clean_up;
@@ -455,6 +469,33 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(
         }
     }
 
+// <<<<<<< ocsp-link
+
+//     int ocsp_verify_err = OCSP_basic_verify(basic_response, validator->cert_chain, validator->trust_store->trust_store, 0);
+//     /* do the crypto checks on the response.*/
+//     if (ocsp_verify_err) {
+//         ret_val = S2N_CERT_ERR_EXPIRED;
+//         goto clean_up;
+//     }
+
+
+//     int single_response_count;
+//     GUARD(OCSP_resp_count(basic_response, &single_response_count));
+//     /* for each response check the timestamps and the status. */
+//     for (i = 0; i < single_response_count; i++) {
+//         int status_reason;
+//         ASN1_GENERALIZEDTIME *revtime, *thisupd, *nextupd;
+
+//         OCSP_SINGLERESP *single_response;
+//         GUARD(OCSP_resp_get0(basic_response, i, &single_response));
+//         if (!single_response) {
+//             goto clean_up;
+//         }
+
+//         int single_ocsp_status;
+//         GUARD(OCSP_single_get0_status(single_response, &single_ocsp_status, &status_reason, &revtime,
+//                                               &thisupd, &nextupd));
+// =======
     if (!issuer) {
         goto clean_up;
     }
@@ -476,6 +517,7 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(
     if (!cert_id) {
         goto clean_up;
     }
+// >>>>>>> main
 
     ASN1_GENERALIZEDTIME *revtime, *thisupd, *nextupd;
     /* Actual verification of the response */
@@ -502,6 +544,7 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(
 
     uint64_t current_time = 0;
     const int current_time_err = conn->config->wall_clock(conn->config->sys_clock_ctx, &current_time);
+
 
     if (current_time_err) {
         goto clean_up;
@@ -545,6 +588,8 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(
     }
 
     return ret_val;
+
+    return S2N_CERT_ERR_UNTRUSTED;
 #endif /* S2N_OCSP_STAPLING_SUPPORTED */
 }
 
