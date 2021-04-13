@@ -450,7 +450,6 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(
 
     const int certs_in_chain = sk_X509_num(cert_chain);
 // >>>>>>> main
-
     if (!certs_in_chain) {
         goto clean_up;
     }
@@ -503,7 +502,7 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(
     /* Important: this checks that the stapled ocsp response CAN be verified, not that it has been verified. */
     const int ocsp_verify_err = OCSP_basic_verify(basic_response, cert_chain, validator->trust_store->trust_store, 0);
     /* do the crypto checks on the response.*/
-    if (!ocsp_verify_err) {
+    if (ocsp_verify_err) {
         ret_val = S2N_CERT_ERR_UNTRUSTED;
         goto clean_up;
     }
@@ -512,7 +511,8 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(
     int reason = 0;
 
     /* sha1 is the only supported OCSP digest */
-    OCSP_CERTID *cert_id = OCSP_cert_to_id(EVP_sha1(), subject, issuer);
+    OCSP_CERTID *cert_id;
+    GUARD(OCSP_cert_to_id(EVP_sha1(), subject, issuer, &cert_id));
 
     if (!cert_id) {
         goto clean_up;
@@ -524,7 +524,7 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(
     const int ocsp_resp_find_status_res = OCSP_resp_find_status(basic_response, cert_id, &status, &reason, &revtime, &thisupd, &nextupd);
     OCSP_CERTID_free(cert_id);
 
-    if (!ocsp_resp_find_status_res) {
+    if (ocsp_resp_find_status_res) {
         ret_val = S2N_CERT_ERR_UNTRUSTED;
         goto clean_up;
     }
