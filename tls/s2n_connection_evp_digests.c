@@ -24,7 +24,7 @@
 int s2n_connection_save_prf_state(struct s2n_connection_prf_handles *prf_handles, struct s2n_connection *conn)
 {
     /* Preserve only the handlers for TLS PRF p_hash pointers to avoid re-allocation */
-    GUARD(s2n_hmac_save_evp_hash_state(&prf_handles->p_hash_s2n_hmac, &conn->prf_space.tls.p_hash.s2n_hmac));
+    POSIX_GUARD(s2n_hmac_save_evp_hash_state(&prf_handles->p_hash_s2n_hmac, &conn->prf_space.tls.p_hash.s2n_hmac));
     prf_handles->p_hash_evp_hmac = conn->prf_space.tls.p_hash.evp_hmac;
 
     return 0;
@@ -48,6 +48,7 @@ int s2n_connection_save_hash_state(struct s2n_connection_hash_handles *hash_hand
     hash_handles->prf_md5_hash_copy = conn->handshake.prf_md5_hash_copy.digest.high_level;
     hash_handles->prf_sha1_hash_copy = conn->handshake.prf_sha1_hash_copy.digest.high_level;
     hash_handles->prf_tls12_hash_copy = conn->handshake.prf_tls12_hash_copy.digest.high_level;
+    hash_handles->server_hello_copy = conn->handshake.server_hello_copy.digest.high_level;
     hash_handles->server_finished_copy = conn->handshake.server_finished_copy.digest.high_level;
 
     /* Preserve only the handlers for SSLv3 PRF hash state pointers to avoid re-allocation */
@@ -69,12 +70,12 @@ int s2n_connection_save_hash_state(struct s2n_connection_hash_handles *hash_hand
  */
 int s2n_connection_save_hmac_state(struct s2n_connection_hmac_handles *hmac_handles, struct s2n_connection *conn)
 {
-    GUARD(s2n_hmac_save_evp_hash_state(&hmac_handles->initial_client, &conn->initial.client_record_mac));
-    GUARD(s2n_hmac_save_evp_hash_state(&hmac_handles->initial_server, &conn->initial.server_record_mac));
-    GUARD(s2n_hmac_save_evp_hash_state(&hmac_handles->initial_client_copy, &conn->initial.record_mac_copy_workspace));
-    GUARD(s2n_hmac_save_evp_hash_state(&hmac_handles->secure_client, &conn->secure.client_record_mac));
-    GUARD(s2n_hmac_save_evp_hash_state(&hmac_handles->secure_server, &conn->secure.server_record_mac));
-    GUARD(s2n_hmac_save_evp_hash_state(&hmac_handles->secure_client_copy, &conn->secure.record_mac_copy_workspace));
+    POSIX_GUARD(s2n_hmac_save_evp_hash_state(&hmac_handles->initial_client, &conn->initial.client_record_mac));
+    POSIX_GUARD(s2n_hmac_save_evp_hash_state(&hmac_handles->initial_server, &conn->initial.server_record_mac));
+    POSIX_GUARD(s2n_hmac_save_evp_hash_state(&hmac_handles->initial_client_copy, &conn->initial.record_mac_copy_workspace));
+    POSIX_GUARD(s2n_hmac_save_evp_hash_state(&hmac_handles->secure_client, &conn->secure.client_record_mac));
+    POSIX_GUARD(s2n_hmac_save_evp_hash_state(&hmac_handles->secure_server, &conn->secure.server_record_mac));
+    POSIX_GUARD(s2n_hmac_save_evp_hash_state(&hmac_handles->secure_client_copy, &conn->secure.record_mac_copy_workspace));
     return 0;
 }
 
@@ -85,7 +86,7 @@ int s2n_connection_save_hmac_state(struct s2n_connection_hmac_handles *hmac_hand
 int s2n_connection_restore_prf_state(struct s2n_connection *conn, struct s2n_connection_prf_handles *prf_handles)
 {
     /* Restore s2n_connection handlers for TLS PRF p_hash */
-    GUARD(s2n_hmac_restore_evp_hash_state(&prf_handles->p_hash_s2n_hmac, &conn->prf_space.tls.p_hash.s2n_hmac));
+    POSIX_GUARD(s2n_hmac_restore_evp_hash_state(&prf_handles->p_hash_s2n_hmac, &conn->prf_space.tls.p_hash.s2n_hmac));
     conn->prf_space.tls.p_hash.evp_hmac = prf_handles->p_hash_evp_hmac;
 
     return 0;
@@ -109,6 +110,7 @@ int s2n_connection_restore_hash_state(struct s2n_connection *conn, struct s2n_co
     conn->handshake.prf_md5_hash_copy.digest.high_level = hash_handles->prf_md5_hash_copy;
     conn->handshake.prf_sha1_hash_copy.digest.high_level = hash_handles->prf_sha1_hash_copy;
     conn->handshake.prf_tls12_hash_copy.digest.high_level = hash_handles->prf_tls12_hash_copy;
+    conn->handshake.server_hello_copy.digest.high_level = hash_handles->server_hello_copy;
     conn->handshake.server_finished_copy.digest.high_level = hash_handles->server_finished_copy;
 
     /* Restore s2n_connection handlers for SSLv3 PRF hash states */
@@ -130,11 +132,11 @@ int s2n_connection_restore_hash_state(struct s2n_connection *conn, struct s2n_co
  */
 int s2n_connection_restore_hmac_state(struct s2n_connection *conn, struct s2n_connection_hmac_handles *hmac_handles)
 {
-    GUARD(s2n_hmac_restore_evp_hash_state(&hmac_handles->initial_client, &conn->initial.client_record_mac));
-    GUARD(s2n_hmac_restore_evp_hash_state(&hmac_handles->initial_server, &conn->initial.server_record_mac));
-    GUARD(s2n_hmac_restore_evp_hash_state(&hmac_handles->initial_client_copy, &conn->initial.record_mac_copy_workspace));
-    GUARD(s2n_hmac_restore_evp_hash_state(&hmac_handles->secure_client, &conn->secure.client_record_mac));
-    GUARD(s2n_hmac_restore_evp_hash_state(&hmac_handles->secure_server, &conn->secure.server_record_mac));
-    GUARD(s2n_hmac_restore_evp_hash_state(&hmac_handles->secure_client_copy, &conn->secure.record_mac_copy_workspace));
+    POSIX_GUARD(s2n_hmac_restore_evp_hash_state(&hmac_handles->initial_client, &conn->initial.client_record_mac));
+    POSIX_GUARD(s2n_hmac_restore_evp_hash_state(&hmac_handles->initial_server, &conn->initial.server_record_mac));
+    POSIX_GUARD(s2n_hmac_restore_evp_hash_state(&hmac_handles->initial_client_copy, &conn->initial.record_mac_copy_workspace));
+    POSIX_GUARD(s2n_hmac_restore_evp_hash_state(&hmac_handles->secure_client, &conn->secure.client_record_mac));
+    POSIX_GUARD(s2n_hmac_restore_evp_hash_state(&hmac_handles->secure_server, &conn->secure.server_record_mac));
+    POSIX_GUARD(s2n_hmac_restore_evp_hash_state(&hmac_handles->secure_client_copy, &conn->secure.record_mac_copy_workspace));
     return 0;
 }

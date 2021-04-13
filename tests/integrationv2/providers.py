@@ -1,7 +1,7 @@
 import pytest
 import threading
 
-from common import ProviderOptions, Ciphers, Curves, Protocols
+from common import ProviderOptions, Ciphers, Curves, Protocols, Certificates
 from global_flags import get_flag, S2N_PROVIDER_VERSION
 
 
@@ -147,32 +147,29 @@ class S2N(Provider):
 
         if self.options.insecure is True:
             cmd_line.append('--insecure')
-        elif self.options.client_trust_store is not None:
-            cmd_line.extend(['-f', self.options.client_trust_store])
-        else:
-            if self.options.cert is not None:
-                cmd_line.extend(['-f', self.options.cert])
+        elif self.options.trust_store:
+            cmd_line.extend(['-f', self.options.trust_store])
+        elif self.options.cert:
+            cmd_line.extend(['-f', self.options.cert])
 
         if self.options.reconnect is True:
             cmd_line.append('-r')
 
-        if self.options.protocol == Protocols.TLS13:
-            cmd_line.append('--tls13')
+        # If the test provided a cipher (security policy) that is compatible with
+        # s2n, we'll use it. Otherwise, default to the appropriate `test_all` policy.
+        cipher_prefs = 'test_all_tls12'
+        if self.options.protocol is Protocols.TLS13:
+            cipher_prefs = 'test_all'
+        if self.options.cipher and self.options.cipher.s2n:
+            cipher_prefs = self.options.cipher.name
 
-        if self.options.cipher is not None:
-            if self.options.cipher is Ciphers.KMS_PQ_TLS_1_0_2019_06:
-                cmd_line.extend(['-c', 'KMS-PQ-TLS-1-0-2019-06'])
-            elif self.options.cipher is Ciphers.PQ_SIKE_TEST_TLS_1_0_2019_11:
-                cmd_line.extend(['-c', 'PQ-SIKE-TEST-TLS-1-0-2019-11'])
-            else:
-                cmd_line.extend(['-c', 'test_all'])
-        else:
-            cmd_line.extend(['-c', 'test_all'])
+        cmd_line.extend(['-c', cipher_prefs])
 
-        if self.options.client_key_file:
-            cmd_line.extend(['--key', self.options.client_key_file])
-        if self.options.client_certificate_file:
-            cmd_line.extend(['--cert', self.options.client_certificate_file])
+        if self.options.use_client_auth:
+            if self.options.key:
+                cmd_line.extend(['--key', self.options.key])
+            if self.options.cert:
+                cmd_line.extend(['--cert', self.options.cert])
 
         if self.options.extra_flags is not None:
             cmd_line.extend(self.options.extra_flags)
@@ -197,15 +194,23 @@ class S2N(Provider):
 
         if self.options.insecure is True:
             cmd_line.append('--insecure')
+        elif self.options.trust_store:
+            cmd_line.extend(['-t', self.options.trust_store])
+        elif self.options.cert:
+            cmd_line.extend(['-t', self.options.cert])
 
-        if self.options.protocol == Protocols.TLS13:
-            cmd_line.append('--tls13')
+        # If the test provided a cipher (security policy) that is compatible with
+        # s2n, we'll use it. Otherwise, default to the appropriate `test_all` policy.
+        cipher_prefs = 'test_all_tls12'
+        if self.options.protocol is Protocols.TLS13:
+            cipher_prefs = 'test_all'
+        if self.options.cipher and self.options.cipher.s2n:
+            cipher_prefs = self.options.cipher.name
 
-        cmd_line.extend(['-c', 'test_all'])
+        cmd_line.extend(['-c', cipher_prefs])
 
         if self.options.use_client_auth is True:
             cmd_line.append('-m')
-            cmd_line.extend(['-t', self.options.client_certificate_file])
 
         if self.options.use_session_ticket is False:
             cmd_line.append('-T')
@@ -321,10 +326,8 @@ class OpenSSL(Provider):
         cmd_line.extend(['-connect', '{}:{}'.format(self.options.host, self.options.port)])
 
         # Additional debugging that will be captured incase of failure
-        cmd_line.extend(['-debug', '-tlsextdebug'])
+        cmd_line.extend(['-debug', '-tlsextdebug', '-state'])
 
-        if self.options.cert is not None:
-            cmd_line.extend(['-cert', self.options.cert])
         if self.options.key is not None:
             cmd_line.extend(['-key', self.options.key])
 
@@ -345,9 +348,11 @@ class OpenSSL(Provider):
         if self.options.curve is not None:
             cmd_line.extend(['-curves', str(self.options.curve)])
 
-        if self.options.use_client_auth is True:
-            cmd_line.extend(['-key', self.options.client_key_file])
-            cmd_line.extend(['-cert', self.options.client_certificate_file])
+        if self.options.use_client_auth:
+            if self.options.key:
+                cmd_line.extend(['-key', self.options.key])
+            if self.options.cert:
+                cmd_line.extend(['-cert', self.options.cert])
 
         if self.options.reconnect is True:
             cmd_line.append('-reconnect')
@@ -380,9 +385,7 @@ class OpenSSL(Provider):
             cmd_line.extend(['-naccept', '1'])
 
         # Additional debugging that will be captured incase of failure
-        cmd_line.extend(['-debug', '-tlsextdebug'])
-
-        cmd_line.append('-state')
+        cmd_line.extend(['-debug', '-tlsextdebug', '-state'])
 
         if self.options.cert is not None:
             cmd_line.extend(['-cert', self.options.cert])
@@ -408,13 +411,63 @@ class OpenSSL(Provider):
         if self.options.curve is not None:
             cmd_line.extend(['-curves', str(self.options.curve)])
         if self.options.use_client_auth is True:
-            cmd_line.extend(['-verify', '1'])
+            # We use "Verify" instead of "verify" to require a client cert
+            cmd_line.extend(['-Verify', '1'])
 
         if self.options.extra_flags is not None:
             cmd_line.extend(self.options.extra_flags)
 
         return cmd_line
 
+class JavaSSL(Provider):
+    """
+    NOTE: Only a Java SSL client has been set up. The server has not been 
+    implemented yet.
+    """
+    def __init__(self, options: ProviderOptions):
+        self.ready_to_send_input_marker = None
+        Provider.__init__(self, options)
+
+    @classmethod
+    def supports_protocol(cls, protocol, with_cert=None):
+        if protocol is Protocols.TLS10:
+            return False
+
+        return True
+
+    @classmethod
+    def supports_cipher(cls, cipher, with_curve=None):
+        # Java SSL does not support CHACHA20 
+        if 'CHACHA20' in cipher.name:
+            return False
+
+        return True
+
+    def setup_server(self):
+        pytest.skip('JavaSSL does not support server mode at this time')
+
+    def setup_client(self):
+        self.ready_to_send_input_marker = "Starting handshake"
+        cmd_line = ['java', "-classpath", "bin", "SSLSocketClient"]
+
+        if self.options.port is not None:
+            cmd_line.extend([self.options.port])
+
+        if self.options.trust_store:
+            cmd_line.extend([self.options.trust_store])
+        elif self.options.cert:
+            cmd_line.extend([self.options.cert])
+
+        if self.options.protocol is not None:
+            cmd_line.extend([self.options.protocol.name])
+
+        if self.options.cipher.iana_standard_name is not None:
+            cmd_line.extend([self.options.cipher.iana_standard_name])
+
+        # Clients are always ready to connect
+        self.set_provider_ready()
+
+        return cmd_line
 
 class BoringSSL(Provider):
     """
@@ -449,6 +502,8 @@ class BoringSSL(Provider):
                 cmd_line.extend(['-curves', 'P-256'])
             elif self.options.curve == Curves.P384:
                 cmd_line.extend(['-curves', 'P-384'])
+            elif self.options.curve == Curves.P521:
+                cmd_line.extend(['-curves', 'P-521'])
             elif self.options.curve == Curves.X25519:
                 pytest.skip('BoringSSL does not support curve {}'.format(self.options.curve))
 

@@ -25,6 +25,7 @@
 #include "error/s2n_errno.h"
 #include "utils/s2n_safety.h"
 #include "utils/s2n_result.h"
+#include "tls/s2n_tls13.h"
 
 int test_count;
 
@@ -149,6 +150,19 @@ int test_count;
 #define EXPECT_ERROR_WITH_ERRNO( function_call, err ) \
     do { \
         EXPECT_ERROR_WITH_ERRNO_NO_RESET( function_call, err ); \
+        RESET_ERRNO(); \
+    } while(0)
+
+#define EXPECT_NULL_WITH_ERRNO_NO_RESET( function_call, err ) \
+    do { \
+        EXPECT_NULL( (function_call) ); \
+        EXPECT_EQUAL(s2n_errno, err); \
+        EXPECT_NOT_NULL(s2n_debug_str); \
+    } while(0)
+
+#define EXPECT_NULL_WITH_ERRNO( function_call, err ) \
+    do { \
+        EXPECT_NULL_WITH_ERRNO_NO_RESET( function_call, err ); \
         RESET_ERRNO(); \
     } while(0)
 

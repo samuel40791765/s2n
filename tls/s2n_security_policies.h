@@ -21,11 +21,15 @@
 #include "tls/s2n_signature_scheme.h"
 #include "tls/s2n_ecc_preferences.h"
 
+/* Kept up-to-date by s2n_security_policies_test */
+#define NUM_RSA_PSS_SCHEMES 6
+
 struct s2n_security_policy {
     uint8_t minimum_protocol_version;
     const struct s2n_cipher_preferences *cipher_preferences;
     const struct s2n_kem_preferences *kem_preferences;
     const struct s2n_signature_preferences *signature_preferences;
+    const struct s2n_signature_preferences *certificate_signature_preferences;
     const struct s2n_ecc_preferences *ecc_preferences;
 };
 
@@ -54,6 +58,7 @@ extern const struct s2n_security_policy security_policy_20170718;
 extern const struct s2n_security_policy security_policy_20190214;
 extern const struct s2n_security_policy security_policy_20190801;
 extern const struct s2n_security_policy security_policy_20190802;
+extern const struct s2n_security_policy security_policy_20201110;
 extern const struct s2n_security_policy security_policy_test_all;
 
 extern const struct s2n_security_policy security_policy_test_all_tls12;
@@ -74,13 +79,12 @@ extern const struct s2n_security_policy security_policy_elb_fs_1_2_2019_08;
 extern const struct s2n_security_policy security_policy_elb_fs_1_1_2019_08;
 extern const struct s2n_security_policy security_policy_elb_fs_1_2_res_2019_08;
 
-#if !defined(S2N_NO_PQ)
 extern const struct s2n_security_policy security_policy_kms_pq_tls_1_0_2019_06;
 extern const struct s2n_security_policy security_policy_kms_pq_tls_1_0_2020_02;
 extern const struct s2n_security_policy security_policy_kms_pq_tls_1_0_2020_07;
 extern const struct s2n_security_policy security_policy_pq_sike_test_tls_1_0_2019_11;
 extern const struct s2n_security_policy security_policy_pq_sike_test_tls_1_0_2020_02;
-#endif
+extern const struct s2n_security_policy security_policy_pq_tls_1_0_2020_12;
 
 extern const struct s2n_security_policy security_policy_cloudfront_upstream;
 extern const struct s2n_security_policy security_policy_cloudfront_upstream_tls10;
@@ -91,7 +95,7 @@ extern const struct s2n_security_policy security_policy_cloudfront_tls_1_0_2016;
 extern const struct s2n_security_policy security_policy_cloudfront_tls_1_1_2016;
 extern const struct s2n_security_policy security_policy_cloudfront_tls_1_2_2018;
 extern const struct s2n_security_policy security_policy_cloudfront_tls_1_2_2019;
-extern const struct s2n_security_policy security_policy_cloudfront_tls_1_2_2020;
+extern const struct s2n_security_policy security_policy_cloudfront_tls_1_2_2021;
 
 extern const struct s2n_security_policy security_policy_kms_tls_1_0_2018_10;
 extern const struct s2n_security_policy security_policy_kms_fips_tls_1_2_2018_10;
@@ -110,3 +114,4 @@ bool s2n_pq_kem_is_extension_required(const struct s2n_security_policy *security
 bool s2n_security_policy_supports_tls13(const struct s2n_security_policy *security_policy);
 int s2n_find_security_policy_from_version(const char *version, const struct s2n_security_policy **security_policy);
 int s2n_validate_kem_preferences(const struct s2n_kem_preferences *kem_preferences, bool pq_kem_extension_required);
+S2N_RESULT s2n_validate_certificate_signature_preferences(const struct s2n_signature_preferences *s2n_certificate_signature_preferences);

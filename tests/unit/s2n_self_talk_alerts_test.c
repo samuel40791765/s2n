@@ -38,6 +38,7 @@
 struct alert_ctx {
     int write_fd;
     int invoked;
+    int count;
 
     uint8_t level;
     uint8_t code;
@@ -111,16 +112,18 @@ int mock_nanoseconds_since_epoch(void *data, uint64_t *nanoseconds)
     return 0;
 }
 
-int client_hello_send_alert(struct s2n_connection *conn, void *ctx)
+int client_hello_send_alerts(struct s2n_connection *conn, void *ctx)
 {
     struct alert_ctx *alert = ctx;
     uint8_t alert_msg[] = { TLS_ALERT, TLS_ALERT_VERSION, TLS_ALERT_LENGTH, alert->level, alert->code };
 
-    if (write(alert->write_fd, alert_msg, sizeof(alert_msg)) != sizeof(alert_msg)) {
-        _exit(100);
-    }
+    for (int i = 0; i < alert->count; i++) {
+        if (write(alert->write_fd, alert_msg, sizeof(alert_msg)) != sizeof(alert_msg)) {
+            _exit(100);
+        }
 
-    alert->invoked = 1;
+        alert->invoked++;
+    }
 
     return 0;
 }
@@ -148,18 +151,19 @@ int main(int argc, char **argv)
     EXPECT_NOT_NULL(chain_and_key = s2n_cert_chain_and_key_new());
     EXPECT_SUCCESS(s2n_cert_chain_and_key_load_pem(chain_and_key, cert_chain_pem, private_key_pem));
 
-    /* Test that we ignore Warning Alerts in S2N_ALERT_IGNORE_WARNINGS mode */
+    /* Test that we ignore Warning Alerts in S2N_ALERT_IGNORE_WARNINGS mode in TLS1.2 */
     {
         EXPECT_NOT_NULL(config = s2n_config_new());
         EXPECT_SUCCESS(s2n_config_add_cert_chain_and_key_to_store(config, chain_and_key));
+        EXPECT_SUCCESS(s2n_config_set_cipher_preferences(config, "default"));
 
         /* Create a pipe */
         struct s2n_test_io_pair io_pair;
         EXPECT_SUCCESS(s2n_io_pair_init(&io_pair));
 
         /* Set up the callback to send an alert after receiving ClientHello */
-        struct alert_ctx warning_alert = {.write_fd = io_pair.server, .invoked = 0, .level = TLS_ALERT_LEVEL_WARNING, .code = TLS_ALERT_UNRECOGNIZED_NAME};
-        EXPECT_SUCCESS(s2n_config_set_client_hello_cb(config, client_hello_send_alert, &warning_alert));
+        struct alert_ctx warning_alert = {.write_fd = io_pair.server, .invoked = 0, .count = 2, .level = TLS_ALERT_LEVEL_WARNING, .code = TLS_ALERT_UNRECOGNIZED_NAME};
+        EXPECT_SUCCESS(s2n_config_set_client_hello_cb(config, client_hello_send_alerts, &warning_alert));
 
         /* Create a child process */
         pid = fork();
@@ -182,9 +186,10 @@ int main(int argc, char **argv)
 
         /* Negotiate the handshake. */
         EXPECT_SUCCESS(s2n_negotiate(conn, &blocked));
+        EXPECT_EQUAL(conn->actual_protocol_version, S2N_TLS12);
 
         /* Ensure that callback was invoked */
-        EXPECT_EQUAL(warning_alert.invoked, 1);
+        EXPECT_EQUAL(warning_alert.invoked, 2);
 
         for (int i = 1; i < 0xffff; i += 100) {
             char * ptr = buffer;
@@ -213,18 +218,19 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_config_free(config));
     }
 
-    /* Test that we don't ignore Fatal Alerts in S2N_ALERT_IGNORE_WARNINGS mode */
+    /* Test that we don't ignore Fatal Alerts in S2N_ALERT_IGNORE_WARNINGS mode in TLS1.2 */
     {
         EXPECT_NOT_NULL(config = s2n_config_new());
         EXPECT_SUCCESS(s2n_config_add_cert_chain_and_key_to_store(config, chain_and_key));
+        EXPECT_SUCCESS(s2n_config_set_cipher_preferences(config, "default"));
 
         /* Create a pipe */
         struct s2n_test_io_pair io_pair;
         EXPECT_SUCCESS(s2n_io_pair_init(&io_pair));
 
         /* Set up the callback to send an alert after receiving ClientHello */
-        struct alert_ctx fatal_alert = {.write_fd = io_pair.server, .invoked = 0, .level = TLS_ALERT_LEVEL_FATAL, .code = TLS_ALERT_UNRECOGNIZED_NAME};
-        EXPECT_SUCCESS(s2n_config_set_client_hello_cb(config, client_hello_send_alert, &fatal_alert));
+        struct alert_ctx fatal_alert = {.write_fd = io_pair.server, .invoked = 0, .count = 1, .level = TLS_ALERT_LEVEL_FATAL, .code = TLS_ALERT_UNRECOGNIZED_NAME};
+        EXPECT_SUCCESS(s2n_config_set_client_hello_cb(config, client_hello_send_alerts, &fatal_alert));
 
         /* Create a child process */
         pid = fork();
@@ -246,6 +252,7 @@ int main(int argc, char **argv)
 
         /* Negotiate the handshake. */
         EXPECT_FAILURE(s2n_negotiate(conn, &blocked));
+        EXPECT_EQUAL(conn->actual_protocol_version, S2N_TLS12);
 
         /* Ensure that callback was invoked */
         EXPECT_EQUAL(fatal_alert.invoked, 1);
@@ -259,18 +266,19 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_config_free(config));
     }
 
-    /* Test that we don't ignore Warning Alerts in S2N_ALERT_FAIL_ON_WARNINGS mode */
+    /* Test that we don't ignore Warning Alerts in S2N_ALERT_FAIL_ON_WARNINGS mode in TLS1.2 */
     {
         EXPECT_NOT_NULL(config = s2n_config_new());
         EXPECT_SUCCESS(s2n_config_add_cert_chain_and_key_to_store(config, chain_and_key));
+        EXPECT_SUCCESS(s2n_config_set_cipher_preferences(config, "default"));
 
         /* Create a pipe */
         struct s2n_test_io_pair io_pair;
         EXPECT_SUCCESS(s2n_io_pair_init(&io_pair));
 
         /* Set up the callback to send an alert after receiving ClientHello */
-        struct alert_ctx warning_alert = {.write_fd = io_pair.server, .invoked = 0, .level = TLS_ALERT_LEVEL_WARNING, .code = TLS_ALERT_UNRECOGNIZED_NAME};
-        EXPECT_SUCCESS(s2n_config_set_client_hello_cb(config, client_hello_send_alert, &warning_alert));
+        struct alert_ctx warning_alert = {.write_fd = io_pair.server, .invoked = 0, .count = 1, .level = TLS_ALERT_LEVEL_WARNING, .code = TLS_ALERT_UNRECOGNIZED_NAME};
+        EXPECT_SUCCESS(s2n_config_set_client_hello_cb(config, client_hello_send_alerts, &warning_alert));
 
         /* Create a child process */
         pid = fork();
@@ -292,6 +300,7 @@ int main(int argc, char **argv)
 
         /* Negotiate the handshake. */
         EXPECT_FAILURE(s2n_negotiate(conn, &blocked));
+        EXPECT_EQUAL(conn->actual_protocol_version, S2N_TLS12);
 
         /* Ensure that callback was invoked */
         EXPECT_EQUAL(warning_alert.invoked, 1);

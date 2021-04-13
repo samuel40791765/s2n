@@ -13,34 +13,31 @@
  * permissions and limitations under the License.
  */
 
+#include <assert.h>
+#include <cbmc_proof/make_common_datastructures.h>
+
 #include "api/s2n.h"
 #include "stuffer/s2n_stuffer.h"
 #include "utils/s2n_mem.h"
 
-#include <assert.h>
-#include <cbmc_proof/proof_allocators.h>
-#include <cbmc_proof/make_common_datastructures.h>
-
-void s2n_stuffer_alloc_harness() {
+void s2n_stuffer_alloc_harness()
+{
     /* Non-deterministic inputs. */
     struct s2n_stuffer *stuffer = cbmc_allocate_s2n_stuffer();
-    __CPROVER_assume(s2n_stuffer_is_valid(stuffer));
+    __CPROVER_assume(s2n_result_is_ok(s2n_stuffer_validate(stuffer)));
     uint32_t size;
 
     /* Save previous state from stuffer. */
     struct s2n_stuffer old_stuffer = *stuffer;
 
-    /* Non-deterministically set initialized (in s2n_mem) to true. */
-    if(nondet_bool()) {
-        s2n_mem_init();
-    }
+    nondet_s2n_mem_init();
 
     /* Operation under verification. */
     if (s2n_stuffer_alloc(stuffer, size) == S2N_SUCCESS) {
         /* Post-conditions. */
         assert(stuffer->alloced);
         assert(stuffer->blob.size == size);
-        assert(s2n_stuffer_is_valid(stuffer));
+        assert(s2n_result_is_ok(s2n_stuffer_validate(stuffer)));
     } else {
         assert(stuffer->blob.data == NULL);
         assert(stuffer->blob.size == 0);

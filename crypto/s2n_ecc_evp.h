@@ -23,6 +23,13 @@
 #include "tls/s2n_tls_parameters.h"
 #include "utils/s2n_safety.h"
 
+/* Share sizes are described here: https://tools.ietf.org/html/rfc8446#section-4.2.8.2
+ * and include the extra "legacy_form" byte */
+#define SECP256R1_SHARE_SIZE ((32 * 2 ) + 1)
+#define SECP384R1_SHARE_SIZE ((48 * 2 ) + 1)
+#define SECP521R1_SHARE_SIZE ((66 * 2 ) + 1)
+#define X25519_SHARE_SIZE (32)
+
 struct s2n_ecc_named_curve {
     /* See https://www.iana.org/assignments/tls-parameters/tls-parameters.xhtml#tls-parameters-8 */
     uint16_t iana_id;
@@ -30,10 +37,12 @@ struct s2n_ecc_named_curve {
     int libcrypto_nid;
     const char *name;
     const uint8_t share_size;
+    int (*generate_key) (const struct s2n_ecc_named_curve *named_curve, EVP_PKEY **evp_pkey);
 };
 
 extern const struct s2n_ecc_named_curve s2n_ecc_curve_secp256r1;
 extern const struct s2n_ecc_named_curve s2n_ecc_curve_secp384r1;
+extern const struct s2n_ecc_named_curve s2n_ecc_curve_secp521r1;
 extern const struct s2n_ecc_named_curve s2n_ecc_curve_x25519;
 
 /* BoringSSL only supports using EVP_PKEY_X25519 with "modern" EC EVP APIs. BoringSSL has a note to possibly add this in
@@ -41,10 +50,10 @@ extern const struct s2n_ecc_named_curve s2n_ecc_curve_x25519;
  */
 #if S2N_OPENSSL_VERSION_AT_LEAST(1, 1, 0) && !defined(LIBRESSL_VERSION_NUMBER) && !defined(OPENSSL_IS_BORINGSSL)
     #define EVP_APIS_SUPPORTED 1
-    #define S2N_ECC_EVP_SUPPORTED_CURVES_COUNT 3
+    #define S2N_ECC_EVP_SUPPORTED_CURVES_COUNT 4
 #else
     #define EVP_APIS_SUPPORTED 0
-    #define S2N_ECC_EVP_SUPPORTED_CURVES_COUNT 2
+    #define S2N_ECC_EVP_SUPPORTED_CURVES_COUNT 3
 #endif
 
 extern const struct s2n_ecc_named_curve *const s2n_all_supported_curves_list[];

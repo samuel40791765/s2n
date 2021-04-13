@@ -54,13 +54,13 @@ int cache_store_callback(struct s2n_connection *conn, void *ctx, uint64_t ttl, c
         return -1;
     }
 
-    uint8_t index = ((const uint8_t *)key)[0];
+    uint8_t idx = ((const uint8_t *)key)[0];
 
-    EXPECT_MEMCPY_SUCCESS(cache[index].key, key, key_size);
-    EXPECT_MEMCPY_SUCCESS(cache[index].value, value, value_size);
+    EXPECT_MEMCPY_SUCCESS(cache[idx].key, key, key_size);
+    EXPECT_MEMCPY_SUCCESS(cache[idx].value, value, value_size);
 
-    cache[index].key_len = key_size;
-    cache[index].value_len = value_size;
+    cache[idx].key_len = key_size;
+    cache[idx].value_len = value_size;
 
     return 0;
 }
@@ -73,30 +73,30 @@ int cache_retrieve_callback(struct s2n_connection *conn, void *ctx, const void *
         return -1;
     }
 
-    uint8_t index = ((const uint8_t *)key)[0];
+    uint8_t idx = ((const uint8_t *)key)[0];
 
-    if (cache[index].lock) {
+    if (cache[idx].lock) {
         /* here we mock a remote connection/event blocking the handshake
          * state machine, until lock is free
          */
-        cache[index].lock = 0;
+        cache[idx].lock = 0;
         return S2N_CALLBACK_BLOCKED;
     }
 
-    if (cache[index].key_len != key_size) {
+    if (cache[idx].key_len != key_size) {
         return -1;
     }
 
-    if (memcmp(cache[index].key, key, key_size)) {
+    if (memcmp(cache[idx].key, key, key_size)) {
         return -1;
     }
 
-    if (*value_size < cache[index].value_len) {
+    if (*value_size < cache[idx].value_len) {
         return -1;
     }
 
-    *value_size = cache[index].value_len;
-    EXPECT_MEMCPY_SUCCESS(value, cache[index].value, cache[index].value_len);
+    *value_size = cache[idx].value_len;
+    EXPECT_MEMCPY_SUCCESS(value, cache[idx].value, cache[idx].value_len);
 
     return 0;
 }
@@ -109,22 +109,22 @@ int cache_delete_callback(struct s2n_connection *conn, void *ctx, const void *ke
         return -1;
     }
 
-    uint8_t index = ((const uint8_t *)key)[0];
+    uint8_t idx = ((const uint8_t *)key)[0];
 
-    if (cache[index].key_len == 0) {
+    if (cache[idx].key_len == 0) {
         return 0;
     }
 
-    if (cache[index].key_len != key_size) {
+    if (cache[idx].key_len != key_size) {
         return -1;
     }
 
-    if (memcmp(cache[index].key, key, key_size)) {
+    if (memcmp(cache[idx].key, key, key_size)) {
         return -1;
     }
 
-    cache[index].key_len = 0;
-    cache[index].value_len = 0;
+    cache[idx].key_len = 0;
+    cache[idx].value_len = 0;
 
     return 0;
 }
@@ -169,7 +169,7 @@ void mock_client(struct s2n_test_io_pair *io_pair)
     }
 
     /* Make sure we did a full handshake */
-    if (!IS_FULL_HANDSHAKE(conn->handshake.handshake_type)) {
+    if (!IS_FULL_HANDSHAKE(conn)) {
         result = 2;
     }
 
@@ -226,7 +226,7 @@ void mock_client(struct s2n_test_io_pair *io_pair)
     }
 
     /* Make sure we did a abbreviated handshake */
-    if (!IS_RESUMPTION_HANDSHAKE(conn->handshake.handshake_type)) {
+    if (!IS_RESUMPTION_HANDSHAKE(conn)) {
         result = 11;
     }
 
@@ -338,6 +338,7 @@ int main(int argc, char **argv)
         initialize_cache();
         EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_SERVER));
         EXPECT_NOT_NULL(config = s2n_config_new());
+        EXPECT_SUCCESS(s2n_config_set_cipher_preferences(config, "default"));
 
         EXPECT_SUCCESS(s2n_read_test_pem(S2N_DEFAULT_TEST_CERT_CHAIN, cert_chain_pem, S2N_MAX_TEST_PEM_SIZE));
         EXPECT_SUCCESS(s2n_read_test_pem(S2N_DEFAULT_TEST_PRIVATE_KEY, private_key_pem, S2N_MAX_TEST_PEM_SIZE));
@@ -352,8 +353,8 @@ int main(int argc, char **argv)
         /* Although we disable session ticket, as long as session cache
          * callbacks are binded, session ticket key storage would be initialized
          */
-        GUARD(s2n_config_set_session_cache_onoff(config, 1));
-        GUARD(config->wall_clock(config->sys_clock_ctx, &now));
+        POSIX_GUARD(s2n_config_set_session_cache_onoff(config, 1));
+        POSIX_GUARD(config->wall_clock(config->sys_clock_ctx, &now));
         EXPECT_SUCCESS(s2n_config_add_ticket_crypto_key(config, ticket_key_name, strlen((char*)ticket_key_name), ticket_key, sizeof(ticket_key), now/ONE_SEC_IN_NANOS));
 
         EXPECT_SUCCESS(s2n_connection_set_config(conn, config));
@@ -376,8 +377,9 @@ int main(int argc, char **argv)
         EXPECT_EQUAL(s2n_connection_get_session_id_length(conn), MAX_KEY_LEN);
         EXPECT_EQUAL(s2n_connection_get_session_id(conn, session_id_from_server, MAX_KEY_LEN), s2n_connection_get_session_id_length(conn));
 
-        /* Make sure we did a full handshake */
-        EXPECT_TRUE(IS_FULL_HANDSHAKE(conn->handshake.handshake_type));
+        /* Make sure we did a full TLS1.2 handshake */
+        EXPECT_TRUE(IS_FULL_HANDSHAKE(conn));
+        EXPECT_EQUAL(conn->actual_protocol_version, S2N_TLS12);
 
         /* Ensure the message was delivered */
         EXPECT_SUCCESS(bytes_read = s2n_recv(conn, buffer, sizeof(buffer), &blocked));
@@ -419,7 +421,7 @@ int main(int argc, char **argv)
         EXPECT_EQUAL(0, memcmp(session_id_from_client, session_id_from_server, MAX_KEY_LEN));
 
         /* Make sure we did a abbreviated handshake */
-        EXPECT_TRUE(IS_RESUMPTION_HANDSHAKE(conn->handshake.handshake_type));
+        EXPECT_TRUE(IS_RESUMPTION_HANDSHAKE(conn));
 
         /* Ensure the message was delivered */
         memset(buffer, 0, sizeof(buffer));

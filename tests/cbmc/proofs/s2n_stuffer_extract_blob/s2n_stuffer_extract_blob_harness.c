@@ -13,45 +13,42 @@
  * permissions and limitations under the License.
  */
 
+#include <assert.h>
+#include <cbmc_proof/cbmc_utils.h>
+#include <cbmc_proof/make_common_datastructures.h>
+
 #include "api/s2n.h"
 #include "error/s2n_errno.h"
 #include "stuffer/s2n_stuffer.h"
 #include "utils/s2n_mem.h"
 
-#include <assert.h>
-#include <cbmc_proof/cbmc_utils.h>
-#include <cbmc_proof/proof_allocators.h>
-#include <cbmc_proof/make_common_datastructures.h>
-
-void s2n_stuffer_extract_blob_harness() {
+void s2n_stuffer_extract_blob_harness()
+{
     /* Non-deterministic inputs. */
     struct s2n_stuffer *stuffer = cbmc_allocate_s2n_stuffer();
-    __CPROVER_assume(s2n_stuffer_is_valid(stuffer));
+    __CPROVER_assume(s2n_result_is_ok(s2n_stuffer_validate(stuffer)));
     struct s2n_blob *blob = cbmc_allocate_s2n_blob();
-    __CPROVER_assume(s2n_blob_is_valid(blob));
+    __CPROVER_assume(s2n_result_is_ok(s2n_blob_validate(blob)));
 
-    /* Non-deterministically set initialized (in s2n_mem) to true. */
-    if(nondet_bool()) {
-        s2n_mem_init();
-    }
+    nondet_s2n_mem_init();
 
     /* Save previous state. */
-    struct s2n_stuffer old_stuffer = *stuffer;
+    struct s2n_stuffer            old_stuffer = *stuffer;
     struct store_byte_from_buffer old_byte_from_stuffer;
     save_byte_from_blob(&stuffer->blob, &old_byte_from_stuffer);
 
     /* Operation under verification. */
     if (s2n_stuffer_extract_blob(stuffer, blob) == S2N_SUCCESS) {
-        assert(s2n_blob_is_valid(blob));
+        assert(s2n_result_is_ok(s2n_blob_validate(blob)));
         assert(blob->size == s2n_stuffer_data_available(stuffer));
         if (blob->size > 0) {
-            uint32_t index;
-            __CPROVER_assume(index < blob->size);
-            assert(blob->data[index] == stuffer->blob.data[stuffer->read_cursor + index]);
+            uint32_t idx;
+            __CPROVER_assume(idx < blob->size);
+            assert(blob->data[ idx ] == stuffer->blob.data[ stuffer->read_cursor + idx ]);
         }
     }
 
     /* Post-conditions. */
-    assert(s2n_stuffer_is_valid(stuffer));
+    assert(s2n_result_is_ok(s2n_stuffer_validate(stuffer)));
     assert_stuffer_equivalence(stuffer, &old_stuffer, &old_byte_from_stuffer);
 }

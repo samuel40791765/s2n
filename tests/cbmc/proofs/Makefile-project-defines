@@ -21,8 +21,13 @@
 
 # Preprocessor include paths -I...
 INCLUDES += -I$(CBMC_ROOT)/include
+INCLUDES += -I$(CBMC_ROOT)/aws-verification-model-for-libcrypto/include
 INCLUDES += -I$(SRCDIR)
 INCLUDES += -I$(SRCDIR)/api
+INCLUDES += -I$(SRCDIR)/crypto
+
+# OpenSSL Model Source
+OPENSSL_SOURCE = $(CBMC_ROOT)/aws-verification-model-for-libcrypto/source
 
 # Preprocessor definitions -D...
 
@@ -31,6 +36,10 @@ INCLUDES += -I$(SRCDIR)/api
 # of the proof that requires them
 AWS_DEEP_CHECKS ?= 0
 DEFINES += -DAWS_DEEP_CHECKS=$(AWS_DEEP_CHECKS)
+
+# Extra CBMC flags not enabled by Makefile.common
+# CHECKFLAGS += --enum-range-check
+CHECKFLAGS += --pointer-primitive-check
 
 ################################################################
 # Remove function bodies that are not used in the proofs.

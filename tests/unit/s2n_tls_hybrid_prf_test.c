@@ -26,7 +26,6 @@
 #include "tls/s2n_prf.h"
 #include "utils/s2n_safety.h"
 #include "tests/testlib/s2n_nist_kats.h"
-#include "crypto/s2n_fips.h"
 
 #define KAT_FILE_NAME "kats/hybrid_prf.kat"
 
@@ -42,13 +41,7 @@
 int main(int argc, char **argv)
 {
     BEGIN_TEST();
-
-#if !defined(S2N_NO_PQ)
-
-    if (s2n_is_in_fips_mode()) {
-        /* There is no support for PQ KEMs while in FIPS mode */
-        END_TEST();
-    }
+    EXPECT_SUCCESS(s2n_disable_tls13());
 
     FILE *kat_file = fopen(KAT_FILE_NAME, "r");
     EXPECT_NOT_NULL(kat_file);
@@ -61,9 +54,9 @@ int main(int argc, char **argv)
     for (uint32_t i = 0; i < NUM_TEST_VECTORS; i++) {
         /* Verify test index */
         uint32_t count = 0;
-        GUARD(FindMarker(kat_file, "count = "));
-        gt_check(fscanf(kat_file, "%u", &count), 0);
-        eq_check(count, i);
+        POSIX_GUARD(FindMarker(kat_file, "count = "));
+        POSIX_ENSURE_GT(fscanf(kat_file, "%u", &count), 0);
+        POSIX_ENSURE_EQ(count, i);
 
         struct s2n_connection *conn;
         EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_SERVER));
@@ -75,26 +68,26 @@ int main(int argc, char **argv)
         uint32_t premaster_kem_secret_length = 0;
         uint32_t client_key_exchange_message_length = 0;
 
-        GUARD(ReadHex(kat_file, premaster_classic_secret, PREMASTER_CLASSIC_SECRET_LENGTH, "premaster_classic_secret = "));
+        POSIX_GUARD(ReadHex(kat_file, premaster_classic_secret, PREMASTER_CLASSIC_SECRET_LENGTH, "premaster_classic_secret = "));
 
-        GUARD(FindMarker(kat_file, "premaster_kem_secret_length = "));
-        gt_check(fscanf(kat_file, "%u", &premaster_kem_secret_length), 0);
+        POSIX_GUARD(FindMarker(kat_file, "premaster_kem_secret_length = "));
+        POSIX_ENSURE_GT(fscanf(kat_file, "%u", &premaster_kem_secret_length), 0);
 
         uint8_t *premaster_kem_secret;
-        notnull_check(premaster_kem_secret = malloc(premaster_kem_secret_length));
-        GUARD(ReadHex(kat_file, premaster_kem_secret, premaster_kem_secret_length, "premaster_kem_secret = "));
+        POSIX_ENSURE_REF(premaster_kem_secret = malloc(premaster_kem_secret_length));
+        POSIX_GUARD(ReadHex(kat_file, premaster_kem_secret, premaster_kem_secret_length, "premaster_kem_secret = "));
 
-        GUARD(ReadHex(kat_file, client_random, CLIENT_RANDOM_LENGTH, "client_random = "));
-        GUARD(ReadHex(kat_file, server_random, SERVER_RANDOM_LENGTH, "server_random = "));
+        POSIX_GUARD(ReadHex(kat_file, client_random, CLIENT_RANDOM_LENGTH, "client_random = "));
+        POSIX_GUARD(ReadHex(kat_file, server_random, SERVER_RANDOM_LENGTH, "server_random = "));
 
-        GUARD(FindMarker(kat_file, "client_key_exchange_message_length = "));
-        gt_check(fscanf(kat_file, "%u", &client_key_exchange_message_length), 0);
+        POSIX_GUARD(FindMarker(kat_file, "client_key_exchange_message_length = "));
+        POSIX_ENSURE_GT(fscanf(kat_file, "%u", &client_key_exchange_message_length), 0);
 
         uint8_t *client_key_exchange_message;
-        notnull_check(client_key_exchange_message = malloc(client_key_exchange_message_length));
-        GUARD(ReadHex(kat_file, client_key_exchange_message, client_key_exchange_message_length, "client_key_exchange_message = "));
+        POSIX_ENSURE_REF(client_key_exchange_message = malloc(client_key_exchange_message_length));
+        POSIX_GUARD(ReadHex(kat_file, client_key_exchange_message, client_key_exchange_message_length, "client_key_exchange_message = "));
 
-        GUARD(ReadHex(kat_file, expected_master_secret, MASTER_SECRET_LENGTH, "master_secret = "));
+        POSIX_GUARD(ReadHex(kat_file, expected_master_secret, MASTER_SECRET_LENGTH, "master_secret = "));
 
         struct s2n_blob classic_pms = {.data = premaster_classic_secret, .size = PREMASTER_CLASSIC_SECRET_LENGTH};
         struct s2n_blob kem_pms = {.data = premaster_kem_secret, .size = premaster_kem_secret_length};
@@ -126,8 +119,6 @@ int main(int argc, char **argv)
     if (FindMarker(kat_file, "count = ") == 0) {
         FAIL_MSG("Found unexpected test vectors in the KAT file. Has the KAT file been changed? Did you update NUM_TEST_VECTORS?");
     }
-
-#endif
 
     END_TEST();
 }

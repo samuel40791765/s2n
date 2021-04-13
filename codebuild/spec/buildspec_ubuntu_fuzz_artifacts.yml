@@ -21,9 +21,14 @@ env:
 phases:
   install:
     runtime-versions:
-      python: 3.7
+      python: 3.x
     commands:
       - echo Entered the install phase...
+      - |
+        if [ -d "third-party-src" ]; then
+          cd third-party-src;
+        fi
+      - $CB_BIN_DIR/install_ubuntu_dependencies.sh
       - apt-key list
       - add-apt-repository ppa:ubuntu-toolchain-r/test -y
       - apt-get update -o Acquire::CompressionTypes::Order::=gz
@@ -41,7 +46,7 @@ phases:
         if expr "${LATEST_CLANG}" != "true" >/dev/null; then
           apt-get install -y --no-install-recommends clang-3.9 llvm-3.9;
         fi
-      - apt-get install -y --no-install-recommends indent kwstyle lcov libssl-dev m4 make net-tools nettle-bin nettle-dev pkg-config psmisc python3-pip shellcheck sudo tcpdump unzip valgrind zlib1g-dev zlibc cmake
+      - apt-get install -y --no-install-recommends indent iproute2 kwstyle lcov libssl-dev m4 make net-tools nettle-bin nettle-dev pkg-config psmisc python3-pip shellcheck sudo tcpdump unzip valgrind zlib1g-dev zlibc cmake
   pre_build:
     commands:
       - |

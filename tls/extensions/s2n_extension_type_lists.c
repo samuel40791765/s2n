@@ -30,8 +30,12 @@
 #include "tls/extensions/s2n_client_sct_list.h"
 #include "tls/extensions/s2n_client_supported_groups.h"
 #include "tls/extensions/s2n_client_pq_kem.h"
+#include "tls/extensions/s2n_client_psk.h"
+#include "tls/extensions/s2n_early_data_indication.h"
+#include "tls/extensions/s2n_psk_key_exchange_modes.h"
 #include "tls/extensions/s2n_client_renegotiation_info.h"
 #include "tls/extensions/s2n_ec_point_format.h"
+#include "tls/extensions/s2n_quic_transport_params.h"
 #include "tls/extensions/s2n_server_certificate_status.h"
 #include "tls/extensions/s2n_server_renegotiation_info.h"
 #include "tls/extensions/s2n_server_alpn.h"
@@ -43,6 +47,7 @@
 #include "tls/extensions/s2n_server_signature_algorithms.h"
 #include "tls/extensions/s2n_server_supported_versions.h"
 #include "tls/extensions/s2n_server_key_share.h"
+#include "tls/extensions/s2n_server_psk.h"
 
 static const s2n_extension_type *const client_hello_extensions[] = {
         &s2n_client_supported_versions_extension,
@@ -59,6 +64,10 @@ static const s2n_extension_type *const client_hello_extensions[] = {
         &s2n_client_pq_kem_extension,
         &s2n_client_renegotiation_info_extension,
         &s2n_client_cookie_extension,
+        &s2n_quic_transport_parameters_extension,
+        &s2n_psk_key_exchange_modes_extension,
+        &s2n_client_early_data_indication_extension,
+        &s2n_client_psk_extension /* MUST be last */
 };
 
 static const s2n_extension_type *const tls12_server_hello_extensions[] = {
@@ -73,16 +82,36 @@ static const s2n_extension_type *const tls12_server_hello_extensions[] = {
         &s2n_server_session_ticket_extension,
 };
 
+/**
+ *= https://tools.ietf.org/rfc/rfc8446#section-4.1.4
+ *# The
+ *# HelloRetryRequest extensions defined in this specification are:
+ *#
+ *# -  supported_versions (see Section 4.2.1)
+ *#
+ *# -  cookie (see Section 4.2.2)
+ *#
+ *# -  key_share (see Section 4.2.8)
+ */
+static const s2n_extension_type *const hello_retry_request_extensions[] = {
+        &s2n_server_supported_versions_extension,
+        &s2n_server_cookie_extension,
+        &s2n_server_key_share_extension,
+};
+
 static const s2n_extension_type *const tls13_server_hello_extensions[] = {
         &s2n_server_supported_versions_extension,
         &s2n_server_key_share_extension,
         &s2n_server_cookie_extension,
+        &s2n_server_psk_extension, /* MUST appear after keyshare extension */
 };
 
 static const s2n_extension_type *const encrypted_extensions[] = {
         &s2n_server_server_name_extension,
         &s2n_server_max_fragment_length_extension,
         &s2n_server_alpn_extension,
+        &s2n_quic_transport_parameters_extension,
+        &s2n_server_early_data_indication_extension,
 };
 
 static const s2n_extension_type *const cert_req_extensions[] = {
@@ -94,22 +123,28 @@ static const s2n_extension_type *const certificate_extensions[] = {
         &s2n_server_sct_list_extension,
 };
 
+static const s2n_extension_type *const nst_extensions[] = {
+        &s2n_nst_early_data_indication_extension,
+};
+
 #define S2N_EXTENSION_LIST(list) { .extension_types = (list), .count = s2n_array_len(list) }
 
 static s2n_extension_type_list extension_lists[] = {
         [S2N_EXTENSION_LIST_CLIENT_HELLO] = S2N_EXTENSION_LIST(client_hello_extensions),
+        [S2N_EXTENSION_LIST_HELLO_RETRY_REQUEST] = S2N_EXTENSION_LIST(hello_retry_request_extensions),
         [S2N_EXTENSION_LIST_SERVER_HELLO_DEFAULT] = S2N_EXTENSION_LIST(tls12_server_hello_extensions),
         [S2N_EXTENSION_LIST_SERVER_HELLO_TLS13] = S2N_EXTENSION_LIST(tls13_server_hello_extensions),
         [S2N_EXTENSION_LIST_ENCRYPTED_EXTENSIONS] = S2N_EXTENSION_LIST(encrypted_extensions),
         [S2N_EXTENSION_LIST_CERT_REQ] = S2N_EXTENSION_LIST(cert_req_extensions),
         [S2N_EXTENSION_LIST_CERTIFICATE] = S2N_EXTENSION_LIST(certificate_extensions),
+        [S2N_EXTENSION_LIST_NST] = S2N_EXTENSION_LIST(nst_extensions),
         [S2N_EXTENSION_LIST_EMPTY] = { .extension_types = NULL, .count = 0 },
 };
 
 int s2n_extension_type_list_get(s2n_extension_list_id list_type, s2n_extension_type_list **extension_list)
 {
-    notnull_check(extension_list);
-    lt_check(list_type, s2n_array_len(extension_lists));
+    POSIX_ENSURE_REF(extension_list);
+    POSIX_ENSURE_LT(list_type, s2n_array_len(extension_lists));
 
     *extension_list = &extension_lists[list_type];
     return S2N_SUCCESS;

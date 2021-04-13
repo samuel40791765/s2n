@@ -43,6 +43,28 @@ int mock_nanoseconds_since_epoch(void *data, uint64_t *nanoseconds)
     return 0;
 }
 
+static int mock_time(void *data, uint64_t *nanoseconds)
+{
+    *nanoseconds = 1000000000;
+    return S2N_SUCCESS;
+}
+
+uint8_t cb_session_data[S2N_TLS12_SESSION_SIZE] = { 0 };
+size_t cb_session_data_len = 0;
+uint32_t cb_session_lifetime = 0;
+static int s2n_test_session_ticket_callback(struct s2n_connection *conn, struct s2n_session_ticket *ticket)
+{
+    EXPECT_NOT_NULL(conn);
+    EXPECT_NOT_NULL(ticket);
+
+    /* Store the callback data for comparison at the end of the connection. */
+    EXPECT_SUCCESS(s2n_session_ticket_get_data_len(ticket, &cb_session_data_len));
+    EXPECT_SUCCESS(s2n_session_ticket_get_data(ticket, sizeof(cb_session_data), cb_session_data));
+    EXPECT_SUCCESS(s2n_session_ticket_get_lifetime(ticket, &cb_session_lifetime));
+
+    return S2N_SUCCESS;
+}
+
 int main(int argc, char **argv)
 {
     char *cert_chain;
@@ -58,7 +80,7 @@ int main(int argc, char **argv)
 
     size_t serialized_session_state_length = 0;
     uint8_t s2n_state_with_session_id = S2N_STATE_WITH_SESSION_ID;
-    uint8_t serialized_session_state[S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TICKET_SIZE_IN_BYTES + S2N_STATE_SIZE_IN_BYTES] = { 0 };
+    uint8_t serialized_session_state[S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TLS12_TICKET_SIZE_IN_BYTES + S2N_STATE_SIZE_IN_BYTES] = { 0 };
 
     /* Session ticket keys. Taken from test vectors in https://tools.ietf.org/html/rfc5869 */
     uint8_t ticket_key_name1[16] = "2016.07.26.15\0";
@@ -96,9 +118,11 @@ int main(int argc, char **argv)
      * 15) Testing s2n_config_set_ticket_encrypt_decrypt_key_lifetime and s2n_config_set_ticket_decrypt_key_lifetime calls.
      * 16) Add keys out of order and pre-emptively add a key.
      * 17) Handshake with client auth and session ticket enabled.
+     * 18) Session resumption APIs and session_ticket_cb return the same values when receiving a new ticket in TLS1.2
      */
 
     BEGIN_TEST();
+    EXPECT_SUCCESS(s2n_disable_tls13());
 
     struct s2n_test_io_pair io_pair;
     EXPECT_SUCCESS(s2n_io_pair_init_non_blocking(&io_pair));
@@ -133,7 +157,7 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_config_set_session_state_lifetime(server_config, S2N_SESSION_STATE_CONFIGURABLE_LIFETIME_IN_SECS));
 
         /* Add one ST key */
-        GUARD(server_config->wall_clock(server_config->sys_clock_ctx, &now));
+        POSIX_GUARD(server_config->wall_clock(server_config->sys_clock_ctx, &now));
         EXPECT_SUCCESS(s2n_config_add_ticket_crypto_key(server_config, ticket_key_name1, strlen((char *)ticket_key_name1), ticket_key1, sizeof(ticket_key1), now/ONE_SEC_IN_NANOS));
 
         EXPECT_SUCCESS(s2n_connection_set_config(server_conn, server_config));
@@ -144,8 +168,8 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_negotiate_test_server_and_client(server_conn, client_conn));
 
         /* Verify that the server did a full handshake and issued NST */
-        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn->handshake.handshake_type));
-        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn->handshake.handshake_type));
+        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn));
+        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn));
 
         /* Verify that the client received NST */
         serialized_session_state_length = s2n_connection_get_session_length(client_conn);
@@ -189,8 +213,8 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_negotiate_test_server_and_client(server_conn, client_conn));
 
         /* Verify that the server did a full handshake and did not issue NST */
-        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn->handshake.handshake_type));
-        EXPECT_FALSE(IS_ISSUING_NEW_SESSION_TICKET(server_conn->handshake.handshake_type));
+        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn));
+        EXPECT_FALSE(IS_ISSUING_NEW_SESSION_TICKET(server_conn));
 
         EXPECT_SUCCESS(s2n_shutdown_test_server_and_client(server_conn, client_conn));
 
@@ -231,16 +255,16 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_negotiate_test_server_and_client(server_conn, client_conn));
 
         /* Verify that the server did an abbreviated handshake and not issue NST */
-        EXPECT_TRUE(IS_RESUMPTION_HANDSHAKE(server_conn->handshake.handshake_type));
+        EXPECT_TRUE(IS_RESUMPTION_HANDSHAKE(server_conn));
         EXPECT_TRUE(s2n_connection_is_session_resumed(server_conn));
-        EXPECT_FALSE(IS_ISSUING_NEW_SESSION_TICKET(server_conn->handshake.handshake_type));
+        EXPECT_FALSE(IS_ISSUING_NEW_SESSION_TICKET(server_conn));
 
         /* Verify that client_ticket is same as before because server didn't issue a NST */
-        uint8_t old_session_ticket[S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TICKET_SIZE_IN_BYTES];
-        EXPECT_MEMCPY_SUCCESS(old_session_ticket, serialized_session_state, S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TICKET_SIZE_IN_BYTES);
+        uint8_t old_session_ticket[S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TLS12_TICKET_SIZE_IN_BYTES];
+        EXPECT_MEMCPY_SUCCESS(old_session_ticket, serialized_session_state, S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TLS12_TICKET_SIZE_IN_BYTES);
         EXPECT_TRUE(s2n_connection_is_session_resumed(client_conn));
         s2n_connection_get_session(client_conn, serialized_session_state, serialized_session_state_length);
-        EXPECT_BYTEARRAY_EQUAL(old_session_ticket, serialized_session_state, S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TICKET_SIZE_IN_BYTES);
+        EXPECT_BYTEARRAY_EQUAL(old_session_ticket, serialized_session_state, S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TLS12_TICKET_SIZE_IN_BYTES);
 
         /* Verify that the server lifetime hint is 0 because server didn't issue a NST */
         EXPECT_EQUAL(s2n_connection_get_session_ticket_lifetime_hint(client_conn), 0);
@@ -294,15 +318,15 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_negotiate_test_server_and_client(server_conn, client_conn));
 
         /* Verify that the server did an abbreviated handshake and issued NST */
-        EXPECT_TRUE(IS_RESUMPTION_HANDSHAKE(server_conn->handshake.handshake_type));
-        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn->handshake.handshake_type));
+        EXPECT_TRUE(IS_RESUMPTION_HANDSHAKE(server_conn));
+        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn));
 
         /* Verify that client_ticket is not same as before because server issued a NST */
-        uint8_t old_session_ticket[S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TICKET_SIZE_IN_BYTES];
-        EXPECT_MEMCPY_SUCCESS(old_session_ticket, serialized_session_state, S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TICKET_SIZE_IN_BYTES);
+        uint8_t old_session_ticket[S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TLS12_TICKET_SIZE_IN_BYTES];
+        EXPECT_MEMCPY_SUCCESS(old_session_ticket, serialized_session_state, S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TLS12_TICKET_SIZE_IN_BYTES);
 
         s2n_connection_get_session(client_conn, serialized_session_state, serialized_session_state_length);
-        EXPECT_TRUE(memcmp(old_session_ticket, serialized_session_state, S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TICKET_SIZE_IN_BYTES));
+        EXPECT_TRUE(memcmp(old_session_ticket, serialized_session_state, S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TLS12_TICKET_SIZE_IN_BYTES));
 
         /* Verify the lifetime hint from the server */
         EXPECT_EQUAL(s2n_connection_get_session_ticket_lifetime_hint(client_conn), S2N_SESSION_STATE_CONFIGURABLE_LIFETIME_IN_SECS);
@@ -357,15 +381,15 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_negotiate_test_server_and_client(server_conn, client_conn));
 
         /* Verify that the server did an abbreviated handshake and did not issue a NST */
-        EXPECT_TRUE(IS_RESUMPTION_HANDSHAKE(server_conn->handshake.handshake_type));
-        EXPECT_FALSE(IS_ISSUING_NEW_SESSION_TICKET(server_conn->handshake.handshake_type));
+        EXPECT_TRUE(IS_RESUMPTION_HANDSHAKE(server_conn));
+        EXPECT_FALSE(IS_ISSUING_NEW_SESSION_TICKET(server_conn));
 
         /* Verify that client_ticket is same as before because server did not issue a NST */
-        uint8_t old_session_ticket[S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TICKET_SIZE_IN_BYTES];
-        EXPECT_MEMCPY_SUCCESS(old_session_ticket, serialized_session_state, S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TICKET_SIZE_IN_BYTES);
+        uint8_t old_session_ticket[S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TLS12_TICKET_SIZE_IN_BYTES];
+        EXPECT_MEMCPY_SUCCESS(old_session_ticket, serialized_session_state, S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TLS12_TICKET_SIZE_IN_BYTES);
 
         s2n_connection_get_session(client_conn, serialized_session_state, serialized_session_state_length);
-        EXPECT_FALSE(memcmp(old_session_ticket, serialized_session_state, S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TICKET_SIZE_IN_BYTES));
+        EXPECT_FALSE(memcmp(old_session_ticket, serialized_session_state, S2N_PARTIAL_SESSION_STATE_INFO_IN_BYTES + S2N_TLS12_TICKET_SIZE_IN_BYTES));
 
         EXPECT_SUCCESS(s2n_shutdown_test_server_and_client(server_conn, client_conn));
 
@@ -409,8 +433,8 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_negotiate_test_server_and_client(server_conn, client_conn));
 
         /* Verify that the server did a full handshake and issued NST */
-        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn->handshake.handshake_type));
-        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn->handshake.handshake_type));
+        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn));
+        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn));
 
         /* Verify that the client received NST */
         serialized_session_state_length = s2n_connection_get_session_length(client_conn);
@@ -470,8 +494,8 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_negotiate_test_server_and_client(server_conn, client_conn));
 
         /* Verify that the server did a full handshake and issued NST */
-        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn->handshake.handshake_type));
-        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn->handshake.handshake_type));
+        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn));
+        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn));
 
         /* Verify that the server has only the unexpired key */
         EXPECT_OK(s2n_set_get(server_config->ticket_keys, 0, (void **)&ticket_key));
@@ -538,8 +562,8 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_negotiate_test_server_and_client(server_conn, client_conn));
 
         /* Verify that the server did a full handshake and issued NST */
-        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn->handshake.handshake_type));
-        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn->handshake.handshake_type));
+        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn));
+        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn));
 
         /* Verify that the client received NST */
         serialized_session_state_length = s2n_connection_get_session_length(client_conn);
@@ -585,8 +609,8 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_negotiate_test_server_and_client(server_conn, client_conn));
 
         /* Verify that the server did a full handshake and did not issue NST */
-        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn->handshake.handshake_type));
-        EXPECT_FALSE(IS_ISSUING_NEW_SESSION_TICKET(server_conn->handshake.handshake_type));
+        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn));
+        EXPECT_FALSE(IS_ISSUING_NEW_SESSION_TICKET(server_conn));
 
         /* Verify that client_ticket is empty */
         EXPECT_EQUAL(s2n_connection_get_session(client_conn, serialized_session_state, serialized_session_state_length), 1 + 1 + client_conn->session_id_len + S2N_STATE_SIZE_IN_BYTES);
@@ -708,8 +732,8 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_negotiate_test_server_and_client(server_conn, client_conn));
 
         /* Verify that the server did a full handshake and issued NST */
-        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn->handshake.handshake_type));
-        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn->handshake.handshake_type));
+        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn));
+        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn));
 
         /* Verify that the client received NST which is encrypted using a key which is at it's peak encryption */
         serialized_session_state_length = s2n_connection_get_session_length(client_conn);
@@ -769,8 +793,8 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_negotiate_test_server_and_client(server_conn, client_conn));
 
         /* Verify that the server did a full handshake and issued NST */
-        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn->handshake.handshake_type));
-        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn->handshake.handshake_type));
+        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn));
+        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn));
 
         /* Verify that the client received NST which is encrypted using a key which is at it's peak encryption */
         serialized_session_state_length = s2n_connection_get_session_length(client_conn);
@@ -837,8 +861,8 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_negotiate_test_server_and_client(server_conn, client_conn));
 
         /* Verify that the server did a full handshake and issued NST */
-        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn->handshake.handshake_type));
-        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn->handshake.handshake_type));
+        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn));
+        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn));
 
         /* Verify that the client received NST which is encrypted using a key which is at it's peak encryption */
         serialized_session_state_length = s2n_connection_get_session_length(client_conn);
@@ -879,7 +903,7 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_config_set_session_state_lifetime(server_config, S2N_SESSION_STATE_CONFIGURABLE_LIFETIME_IN_SECS));
 
         /* Add a key. After 1 hour it will be considered an encrypt-decrypt key. */
-        GUARD(server_config->wall_clock(server_config->sys_clock_ctx, &now));
+        POSIX_GUARD(server_config->wall_clock(server_config->sys_clock_ctx, &now));
         EXPECT_SUCCESS(s2n_config_add_ticket_crypto_key(server_config, ticket_key_name1, strlen((char *)ticket_key_name1), ticket_key1, sizeof(ticket_key1), (now/ONE_SEC_IN_NANOS) + 3600));
 
         /* Add a key. After 1 hour it will reach it's peak */
@@ -897,8 +921,8 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_negotiate_test_server_and_client(server_conn, client_conn));
 
         /* Verify that the server did a full handshake and issued NST */
-        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn->handshake.handshake_type));
-        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn->handshake.handshake_type));
+        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn));
+        EXPECT_TRUE(IS_ISSUING_NEW_SESSION_TICKET(server_conn));
 
         /* Verify that the client received NST which is encrypted using a key which is at it's peak encryption */
         serialized_session_state_length = s2n_connection_get_session_length(client_conn);
@@ -951,8 +975,132 @@ int main(int argc, char **argv)
 
         /* Verify that the server did a full handshake and did not issue NST since client
          * auth is enabled in server mode */
-        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn->handshake.handshake_type));
-        EXPECT_FALSE(IS_ISSUING_NEW_SESSION_TICKET(server_conn->handshake.handshake_type));
+        EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn));
+        EXPECT_FALSE(IS_ISSUING_NEW_SESSION_TICKET(server_conn));
+
+        EXPECT_SUCCESS(s2n_shutdown_test_server_and_client(server_conn, client_conn));
+
+        EXPECT_SUCCESS(s2n_connection_free(server_conn));
+        EXPECT_SUCCESS(s2n_connection_free(client_conn));
+
+        EXPECT_SUCCESS(s2n_config_free(server_config));
+        EXPECT_SUCCESS(s2n_config_free(client_config));
+    }
+
+    /* s2n_decrypt_session_ticket fails to decrypt when presented with a valid ticket_key, valid iv and invalid encrypted blob */
+    {
+        EXPECT_NOT_NULL(server_conn = s2n_connection_new(S2N_SERVER));
+        EXPECT_NOT_NULL(server_config = s2n_config_new());
+
+        /* Add Session Ticket key on the server config */
+        EXPECT_SUCCESS(s2n_config_set_session_tickets_onoff(server_config, 1));
+        EXPECT_SUCCESS(s2n_config_add_ticket_crypto_key(server_config, ticket_key_name1, strlen((char *)ticket_key_name1), ticket_key1, sizeof(ticket_key1), 0));
+        EXPECT_SUCCESS(s2n_connection_set_config(server_conn, server_config));
+
+        /* Setup stuffers value containing the valid key name, valid iv and invalid encrypted blob */
+        POSIX_GUARD(s2n_stuffer_write_bytes(&server_conn->client_ticket_to_decrypt, ticket_key_name1, sizeof(ticket_key_name1)));
+
+        uint8_t valid_iv[S2N_TLS_GCM_IV_LEN] = {0};
+        POSIX_GUARD(s2n_stuffer_write_bytes(&server_conn->client_ticket_to_decrypt, valid_iv, sizeof(valid_iv)));
+
+        uint8_t invalid_en_data[S2N_STATE_SIZE_IN_BYTES + S2N_TLS_GCM_TAG_LEN] = {0};
+        POSIX_GUARD(s2n_stuffer_write_bytes(&server_conn->client_ticket_to_decrypt, invalid_en_data, sizeof(invalid_en_data)));
+
+        server_conn->session_ticket_status = S2N_DECRYPT_TICKET;
+        EXPECT_FAILURE_WITH_ERRNO(s2n_decrypt_session_ticket(server_conn), S2N_ERR_DECRYPT);
+
+        EXPECT_SUCCESS(s2n_connection_free(server_conn));
+        EXPECT_SUCCESS(s2n_config_free(server_config));
+    }
+
+    /* s2n_decrypt_session_ticket fails with a key not found error when presented with an invalid ticket_key, valid iv and invalid encrypted blob */
+    {
+        EXPECT_NOT_NULL(server_conn = s2n_connection_new(S2N_SERVER));
+        EXPECT_NOT_NULL(server_config = s2n_config_new());
+
+        /* Add Session Ticket key on the server config */
+        EXPECT_SUCCESS(s2n_config_set_session_tickets_onoff(server_config, 1));
+        EXPECT_SUCCESS(s2n_config_add_ticket_crypto_key(server_config, ticket_key_name1, strlen((char *)ticket_key_name1), ticket_key1, sizeof(ticket_key1), 0));
+        EXPECT_SUCCESS(s2n_connection_set_config(server_conn, server_config));
+
+        /* Setup stuffers value containing the invalid key name, valid iv and invalid encrypted blob */
+        POSIX_GUARD(s2n_stuffer_write_bytes(&server_conn->client_ticket_to_decrypt, ticket_key_name2, sizeof(ticket_key_name2)));
+
+        uint8_t valid_iv[S2N_TLS_GCM_IV_LEN] = {0};
+        POSIX_GUARD(s2n_stuffer_write_bytes(&server_conn->client_ticket_to_decrypt, valid_iv, sizeof(valid_iv)));
+
+        uint8_t invalid_en_data[S2N_STATE_SIZE_IN_BYTES + S2N_TLS_GCM_TAG_LEN] = {0};
+        POSIX_GUARD(s2n_stuffer_write_bytes(&server_conn->client_ticket_to_decrypt, invalid_en_data, sizeof(invalid_en_data)));
+
+        server_conn->session_ticket_status = S2N_DECRYPT_TICKET;
+        EXPECT_FAILURE_WITH_ERRNO(s2n_decrypt_session_ticket(server_conn), S2N_ERR_KEY_USED_IN_SESSION_TICKET_NOT_FOUND);
+
+        EXPECT_SUCCESS(s2n_connection_free(server_conn));
+        EXPECT_SUCCESS(s2n_config_free(server_config));
+    }
+
+    /* Test s2n_connection_is_session_resumed */
+    {
+        EXPECT_NOT_NULL(server_conn = s2n_connection_new(S2N_SERVER));
+
+        EXPECT_TRUE(s2n_connection_get_protocol_version(server_conn) == S2N_TLS12);
+        EXPECT_TRUE(server_conn->handshake.handshake_type == INITIAL);
+        EXPECT_FALSE(s2n_connection_is_session_resumed(server_conn));
+
+        server_conn->handshake.handshake_type = NEGOTIATED | WITH_SESSION_TICKET;
+        EXPECT_TRUE(s2n_connection_is_session_resumed(server_conn));
+
+        server_conn->actual_protocol_version = S2N_TLS13;
+        server_conn->handshake.handshake_type = INITIAL;
+        EXPECT_FALSE(s2n_connection_is_session_resumed(server_conn));
+
+        server_conn->handshake.handshake_type = NEGOTIATED | WITH_SESSION_TICKET;
+        EXPECT_FALSE(s2n_connection_is_session_resumed(server_conn));
+
+        EXPECT_SUCCESS(s2n_connection_free(server_conn));
+    }
+
+    /* Session resumption APIs and session_ticket_cb return the same values
+     * when receiving a new ticket in TLS1.2
+     */
+    {
+        EXPECT_NOT_NULL(client_conn = s2n_connection_new(S2N_CLIENT));
+
+        EXPECT_NOT_NULL(client_config = s2n_config_new());
+        EXPECT_SUCCESS(s2n_config_set_wall_clock(client_config, mock_time, NULL));
+        EXPECT_SUCCESS(s2n_config_set_session_tickets_onoff(client_config, 1));
+        EXPECT_SUCCESS(s2n_config_disable_x509_verification(client_config));
+
+        /* Client will use callback when server nst is received */
+        EXPECT_SUCCESS(s2n_config_set_session_ticket_cb(client_config, s2n_test_session_ticket_callback, NULL));
+        EXPECT_SUCCESS(s2n_connection_set_config(client_conn, client_config));
+
+        EXPECT_NOT_NULL(server_conn = s2n_connection_new(S2N_SERVER));
+        EXPECT_NOT_NULL(server_config = s2n_config_new());
+        EXPECT_SUCCESS(s2n_config_set_session_tickets_onoff(server_config, 1));
+        EXPECT_SUCCESS(s2n_config_add_cert_chain_and_key_to_store(server_config, chain_and_key));
+
+        /* Create nonblocking pipes */
+        EXPECT_SUCCESS(s2n_connections_set_io_pair(client_conn, server_conn, &io_pair));
+
+        /* Set session state lifetime for 15 hours which is equal to the default lifetime of a ticket key */
+        EXPECT_SUCCESS(s2n_config_set_session_state_lifetime(server_config, S2N_SESSION_STATE_CONFIGURABLE_LIFETIME_IN_SECS));
+
+        /* Add one ST key */
+        POSIX_GUARD(server_config->wall_clock(server_config->sys_clock_ctx, &now));
+        EXPECT_SUCCESS(s2n_config_add_ticket_crypto_key(server_config, ticket_key_name1, strlen((char *)ticket_key_name1), ticket_key1, sizeof(ticket_key1), now/ONE_SEC_IN_NANOS));
+
+        EXPECT_SUCCESS(s2n_connection_set_config(server_conn, server_config));
+
+        EXPECT_SUCCESS(s2n_negotiate_test_server_and_client(server_conn, client_conn));
+
+        /* Expect values from the session_ticket_cb are equivalent to values from the APIs */
+        EXPECT_EQUAL(cb_session_data_len, s2n_connection_get_session_length(client_conn));
+        uint8_t session_data[S2N_TLS12_SESSION_SIZE] = { 0 };
+        EXPECT_SUCCESS(s2n_connection_get_session(client_conn, session_data, cb_session_data_len));
+        EXPECT_BYTEARRAY_EQUAL(cb_session_data, session_data, cb_session_data_len);
+
+        EXPECT_EQUAL(cb_session_lifetime, s2n_connection_get_session_ticket_lifetime_hint(client_conn));
 
         EXPECT_SUCCESS(s2n_shutdown_test_server_and_client(server_conn, client_conn));
 

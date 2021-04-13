@@ -13,6 +13,8 @@
 # permissions and limitations under the License.
 #
 
+# The timeout command sends a TERM and under normal circumstances returns
+# exit code 124. We'll undo this later. 
 set -e
 
 usage() {
@@ -29,7 +31,8 @@ FUZZ_TIMEOUT_SEC=$2
 MIN_TEST_PER_SEC="1000"
 MIN_FEATURES_COVERED="100"
 
-if [[ $TEST_NAME == *_negative_test ]];
+# Failures for negative tests on AFL can be ignored.
+if [[ $TEST_NAME == *_negative_test && "$AFL_FUZZ" != "true" ]];
 then
     EXPECTED_TEST_FAILURE=1
 else
@@ -39,7 +42,7 @@ fi
 ASAN_OPTIONS+="symbolize=1"
 LSAN_OPTIONS+="log_threads=1"
 UBSAN_OPTIONS+="print_stacktrace=1"
-NUM_CPU_THREADS=`nproc`
+NUM_CPU_THREADS=$(nproc)
 LIBFUZZER_ARGS+="-timeout=5 -max_len=4096 -print_final_stats=1 -jobs=${NUM_CPU_THREADS} -workers=${NUM_CPU_THREADS} -max_total_time=${FUZZ_TIMEOUT_SEC}"
 
 TEST_SPECIFIC_OVERRIDES="${PWD}/LD_PRELOAD/${TEST_NAME}_overrides.so"
@@ -57,12 +60,12 @@ fi
 FIPS_TEST_MSG=""
 if [ -n "${S2N_TEST_IN_FIPS_MODE}" ];
 then
-    if [[ $TEST_NAME == *bike* ]] || [[ $TEST_NAME == *sike* ]] || [[ $TEST_NAME == *kyber* ]]; then
-        printf "Skipping %s because PQ crypto is not supported in FIPS mode...\n" ${TEST_NAME}
-        exit 0
-    else
-        FIPS_TEST_MSG=" FIPS test"
-    fi
+    FIPS_TEST_MSG=" FIPS test"
+fi
+
+if [ ! -d "./corpus/${TEST_NAME}" ];
+then
+  printf "\033[33;1mWARNING!\033[0m ./corpus/${TEST_NAME} directory does not exist, feature coverage may be below minimum.\n\n"
 fi
 
 # Make directory if it doesn't exist
@@ -70,24 +73,40 @@ mkdir -p "./corpus/${TEST_NAME}"
 
 ACTUAL_TEST_FAILURE=0
 
-# Copy existing Corpus to a temp directory so that new inputs from fuzz tests runs will add new inputs to the temp directory. 
+# Copy existing Corpus to a temp directory so that new inputs from fuzz tests runs will add new inputs to the temp directory.
 # This allows us to minimize new inputs before merging to the original corpus directory.
 TEMP_CORPUS_DIR="$(mktemp -d)"
 cp -r ./corpus/${TEST_NAME}/. "${TEMP_CORPUS_DIR}"
 
 # Run AFL instead of libfuzzer if AFL_FUZZ is set. Not compatible with fuzz coverage.
-if [[ ! -z "$AFL_FUZZ" && -z "$FUZZ_COVERAGE" ]]; then
-    printf "Running %-s %-40s for %5d sec... " "${FIPS_TEST_MSG}" ${TEST_NAME} ${FUZZ_TIMEOUT_SEC}
+if [[ ${AFL_FUZZ} == "true" && ${FUZZ_COVERAGE} != "true" ]]; then
+    unset LD_PRELOAD
+    # See https://aflplus.plus/docs/env_variables/
+    export AFL_NO_UI=true
+    export AFL_HARDEN=true
+    printf "Running AFL %-s %-40s for %5d sec... " "${FIPS_TEST_MSG}" ${TEST_NAME} ${FUZZ_TIMEOUT_SEC}
     mkdir -p results/${TEST_NAME}
-    timeout ${FUZZ_TIMEOUT_SEC} afl-fuzz -i corpus/${TEST_NAME} -o results/${TEST_NAME} -m none ./${TEST_NAME}
-    CRASH_COUNT=`sed -n -e 's/^unique_crashes *: //p' ./results/${TEST_NAME}/fuzzer_stats`
-    TEST_COUNT=`sed -n -e 's/^execs_done *: //p' ./results/${TEST_NAME}/fuzzer_stats`
-    TESTS_PER_SEC=`sed -n -e 's/^execs_per_sec *: //p' ./results/${TEST_NAME}/fuzzer_stats`
+    set +e
+    timeout ${FUZZ_TIMEOUT_SEC} ${LIBFUZZER_INSTALL_DIR}/afl-fuzz -i corpus/${TEST_NAME} -o results/${TEST_NAME} -m none ./${TEST_NAME}  2>&1> ./results/${TEST_NAME}/console_output.log
+    returncode=$?
+    # See the timeout man page for specifics
+    if [[ ${returncode} -ne 124 ]]; then
+        printf "\033[33;1mWARNING!\033[0m AFL exited with an unexpected return value: %8d" ${returncode}
+    fi
+    set -e
+    CRASH_COUNT=$(sed -n -e 's/^unique_crashes *: //p' ./results/${TEST_NAME}/fuzzer_stats)
+    TEST_COUNT=$(sed -n -e 's/^execs_done *: //p' ./results/${TEST_NAME}/fuzzer_stats)
+    FLOAT_TESTS_PER_SEC=$(sed -n -e 's/^execs_per_sec *: //p' ./results/${TEST_NAME}/fuzzer_stats)
+    TESTS_PER_SEC=$(echo "($FLOAT_TESTS_PER_SEC+.5)/1"|bc)
+
+    if [[ ${TESTS_PER_SEC} -lt 10 ]]; then
+        printf "\033[33;1mWARNING!\033[0m %10d tests, only %6d tests per second; test is too slow.\n" ${TEST_COUNT} ${TESTS_PER_SEC}
+    fi
     if [[ ${CRASH_COUNT} -gt 0 ]]; then
         ACTUAL_TEST_FAILURE=1
     fi
-    if [[ $ACTUAL_TEST_FAILURE == $EXPECTED_TEST_FAILURE ]]; then
-        printf "\033[32;1mPASSED\033[0m %8d tests, %6d test/sec\n" ${TEST_COUNT} ${TESTS_PER_SEC}
+    if [[ ${ACTUAL_TEST_FAILURE} == ${EXPECTED_TEST_FAILURE} ]]; then
+        printf "\033[32;1mPASSED\033[0m %8d tests, %.1f test/sec\n" ${TEST_COUNT} ${TESTS_PER_SEC}
         exit 0
     else
         printf "\033[31;1mFAILED\033[0m %10d tests, %6d unique crashes\n" ${TEST_COUNT} ${CRASH_COUNT}
@@ -98,7 +117,7 @@ else
 fi
 
 # Setup and clean profile structure if FUZZ_COVERAGE is enabled, otherwise run as normal
-if [[ ! -z "$FUZZ_COVERAGE" ]]; then
+if [[ "$FUZZ_COVERAGE" == "true" ]]; then
     mkdir -p "./profiles/${TEST_NAME}"
     rm -f ./profiles/${TEST_NAME}/*.profraw
     LLVM_PROFILE_FILE="./profiles/${TEST_NAME}/${TEST_NAME}.%p.profraw" ./${TEST_NAME} ${LIBFUZZER_ARGS} ${TEMP_CORPUS_DIR} > ${TEST_NAME}_output.txt 2>&1 || ACTUAL_TEST_FAILURE=1
@@ -118,7 +137,7 @@ declare -i TARGET_COV=0
 # Coverage is overlayed on source code in ${TEST_NAME}_cov.html, and coverage statistics are available in ${TEST_NAME}_cov.txt
 # If using LLVM version 9 or greater, coverage is output in LCOV format instead of HTML
 # All files are stored in the s2n coverage directory
-if [[ ! -z "$FUZZ_COVERAGE" ]]; then
+if [[ "$FUZZ_COVERAGE" == "true" ]]; then
     mkdir -p ${COVERAGE_DIR}/fuzz
     llvm-profdata merge -sparse ./profiles/${TEST_NAME}/*.profraw -o ./profiles/${TEST_NAME}/${TEST_NAME}.profdata
     llvm-cov report -instr-profile=./profiles/${TEST_NAME}/${TEST_NAME}.profdata ${S2N_ROOT}/lib/libs2n.so ${FUZZCOV_SOURCES} -show-functions > ${COVERAGE_DIR}/fuzz/${TEST_NAME}_cov.txt
@@ -151,7 +170,7 @@ then
 
     # Output target function coverage percentage if target functions are defined and fuzzing coverage is enabled
     # Otherwise, print number of features covered
-    if [[ ! -z "$FUZZ_COVERAGE" && ! -z "$TARGET_FUNCS" && "$EXPECTED_TEST_FAILURE" != 1 && "$TARGET_TOTAL" != 0 ]];
+    if [[ "$FUZZ_COVERAGE" == "true" && ! -z "$TARGET_FUNCS" && "$EXPECTED_TEST_FAILURE" != 1 && "$TARGET_TOTAL" != 0 ]];
     then
         printf ", %6.2f%% target coverage" "$(( 10000 * ($TARGET_TOTAL - $TARGET_COV) / $TARGET_TOTAL ))e-2"
     else
@@ -177,7 +196,7 @@ then
         fi
 
         if [ "$FEATURE_COVERAGE" -lt $MIN_FEATURES_COVERED ]; then
-            printf "\033[33;1mWARNING!\033[0m ${TEST_NAME} only covers ${FEATURE_COVERAGE} features, which is below ${MIN_FEATURES_COVERED}! This is likely a bug.\n"
+            printf "\033[31;1mERROR!\033[0m ${TEST_NAME} only covers ${FEATURE_COVERAGE} features, which is below ${MIN_FEATURES_COVERED}! This may be due to missing corpus files or a bug.\n"
             exit -1;
         fi
     fi

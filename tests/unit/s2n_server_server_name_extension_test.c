@@ -25,9 +25,7 @@
 int main(int argc, char **argv)
 {
     BEGIN_TEST();
-
-    EXPECT_TRUE(IS_RESUMPTION_HANDSHAKE(S2N_TEST_RESUMPTION_HANDSHAKE));
-    EXPECT_FALSE(IS_RESUMPTION_HANDSHAKE(S2N_TEST_NOT_RESUMPTION_HANDSHAKE));
+    EXPECT_SUCCESS(s2n_disable_tls13());
 
     /* should_send */
     {

@@ -31,7 +31,6 @@ well_known_endpoints = [
     {"endpoint": "amazon.com"},
     {"endpoint": "facebook.com"},
     {"endpoint": "google.com"},
-    {"endpoint": "netflix.com"},
     {"endpoint": "s3.amazonaws.com"},
     {"endpoint": "twitter.com"},
     {"endpoint": "wikipedia.org"},
@@ -54,12 +53,6 @@ if os.getenv("S2N_NO_PQ") is None:
     ]
 
     well_known_endpoints.extend(pq_endpoints)
-
-
-# Make an exception to allow failure (if CI is having issues)
-allowed_endpoints_failures = [
-    'wikipedia.org'
-]
 
 def print_result(result_prefix, return_code):
     print(result_prefix, end="")
@@ -84,7 +77,7 @@ def try_client_handshake(endpoint, arguments, expected_cipher):
     if expected_cipher:
         expected_output += expected_cipher
 
-    for line in range(0, 10):
+    for line in range(0, NUM_EXPECTED_LINES_OUTPUT):
         output = str(s2nc.stdout.readline().decode("utf-8"))
         if expected_output in output:
             found = 1
@@ -105,7 +98,7 @@ def well_known_endpoints_test(use_corked_io, tls13_enabled):
     opt_list = []
 
     if tls13_enabled:
-        arguments += ["--tls13", "--ciphers", "default_tls13"]
+        arguments += ["--ciphers", "default_tls13"]
         opt_list += ["TLS 1.3"]
     if use_corked_io:
         arguments += ["-C"]
@@ -133,15 +126,13 @@ def well_known_endpoints_test(use_corked_io, tls13_enabled):
         # Retry handshake in case there are any problems going over the internet
         for i in range(1, maxRetries):
             ret = try_client_handshake(endpoint, arguments, expected_cipher)
-            if ret is 0:
+            if ret == 0:
                 break
             else:
-                if endpoint in allowed_endpoints_failures:
-                    break
                 time.sleep(i)
 
         print_result("Endpoint: %-35sExpected Cipher: %-40s... " % (endpoint, expected_cipher if expected_cipher else "Any"), ret)
-        if ret != 0 and endpoint not in allowed_endpoints_failures:
+        if ret != 0:
             failed += 1
 
     return failed

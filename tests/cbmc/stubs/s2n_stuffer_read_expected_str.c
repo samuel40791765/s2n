@@ -13,16 +13,16 @@
  * limitations under the License.
  */
 
+#include <cbmc_proof/nondet.h>
+
 #include "api/s2n.h"
 #include "stuffer/s2n_stuffer.h"
 #include "utils/s2n_safety.h"
 
-#include <cbmc_proof/nondet.h>
-
 int s2n_stuffer_read_expected_str(struct s2n_stuffer *s2n_stuffer, const char *expected)
 {
-    PRECONDITION_POSIX(s2n_stuffer_is_valid(s2n_stuffer));
-    notnull_check(expected);
+    POSIX_PRECONDITION(s2n_stuffer_validate(s2n_stuffer));
+    POSIX_ENSURE_REF(expected);
     /*
      * This is stub is incomplete and it needs to update stuffer
      * cursors appropriately https://github.com/awslabs/s2n/issues/2173.

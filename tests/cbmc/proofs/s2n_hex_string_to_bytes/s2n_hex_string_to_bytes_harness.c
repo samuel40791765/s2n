@@ -13,36 +13,39 @@
  * permissions and limitations under the License.
  */
 
-#include "api/s2n.h"
-#include "error/s2n_errno.h"
-#include "utils/s2n_blob.h"
-
 #include <cbmc_proof/cbmc_utils.h>
-#include <cbmc_proof/proof_allocators.h>
 #include <cbmc_proof/make_common_datastructures.h>
 #include <string.h>
+
+#include "error/s2n_errno.h"
+#include "utils/s2n_blob.h"
 
 void s2n_hex_string_to_bytes_harness()
 {
     /* Non-deterministic inputs. */
     struct s2n_blob *blob = cbmc_allocate_s2n_blob();
-    __CPROVER_assume(s2n_blob_is_valid(blob));
+    __CPROVER_assume(s2n_result_is_ok(s2n_blob_validate(blob)));
     char *str = ensure_c_str_is_allocated(MAX_STRING_LEN);
 
     /* Save previous state. */
-    struct s2n_blob old_blob = *blob;
+    struct s2n_blob               old_blob = *blob;
     struct store_byte_from_buffer old_byte_from_blob;
     save_byte_from_blob(blob, &old_byte_from_blob);
 
     /* Operation under verification. */
-    if(s2n_hex_string_to_bytes(str, blob) == S2N_SUCCESS) {
-        size_t strLength = strlen(str);
-        assert(blob->size >= (strLength / 2));
+    if (s2n_hex_string_to_bytes(str, blob) == S2N_SUCCESS) {
+        size_t strLength = 0;
+        for (size_t i = 0; i < strlen(str); i++) {
+            if (str[i] != ' ') {
+                strLength++;
+            }
+        }
         assert(strLength % 2 == 0);
+        assert(blob->size == (strLength / 2));
     } else {
         assert(blob->allocated == old_blob.allocated);
         assert(blob->growable == old_blob.growable);
         assert(blob->size == old_blob.size);
     }
-    assert(s2n_blob_is_valid(blob));
+    assert(s2n_result_is_ok(s2n_blob_validate(blob)));
 }

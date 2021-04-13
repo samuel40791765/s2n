@@ -34,7 +34,19 @@
 
 #define __S2N_ENSURE_LIKELY( cond, action ) do {if ( s2n_unlikely( !(cond) ) ) { action; }} while (0)
 
-#define __S2N_ENSURE_CONDITION( cond, action ) __S2N_ENSURE_LIKELY( cond, action )
+#ifdef NDEBUG
+#define __S2N_ENSURE_DEBUG( cond, action ) do {} while (0)
+#else
+#define __S2N_ENSURE_DEBUG( cond, action ) __S2N_ENSURE_LIKELY((cond), action)
+#endif
+
+#define __S2N_ENSURE_PRECONDITION( result ) (s2n_likely(s2n_result_is_ok(result)) ? S2N_RESULT_OK : S2N_RESULT_ERROR)
+
+#ifdef NDEBUG
+#define __S2N_ENSURE_POSTCONDITION( result ) (S2N_RESULT_OK)
+#else
+#define __S2N_ENSURE_POSTCONDITION( result ) (s2n_likely(s2n_result_is_ok(result)) ? S2N_RESULT_OK : S2N_RESULT_ERROR)
+#endif
 
 #define __S2N_ENSURE_SAFE_MEMCPY( d , s , n , guard )                            \
   do {                                                                           \
@@ -55,4 +67,20 @@
     }                                                                            \
   } while(0)
 
+/**
+ * `restrict` is a part of the c99 standard and will work with any C compiler. If you're trying to
+ * compile with a C++ compiler `restrict` is invalid. However some C++ compilers support the behavior
+ * of `restrict` using the `__restrict__` keyword. Therefore if the compiler supports `__restrict__`
+ * use it.
+ *
+ * This is helpful for the benchmarks in tests/benchmark which use Google's Benchmark library and
+ * are all written in C++.
+ *
+ * https://gcc.gnu.org/onlinedocs/gcc/Restricted-Pointers.html
+ *
+ */
+#if defined(S2N___RESTRICT__SUPPORTED)
+extern void* s2n_ensure_memcpy_trace(void *__restrict__ to, const void *__restrict__ from, size_t size, const char *debug_str);
+#else
 extern void* s2n_ensure_memcpy_trace(void *restrict to, const void *restrict from, size_t size, const char *debug_str);
+#endif

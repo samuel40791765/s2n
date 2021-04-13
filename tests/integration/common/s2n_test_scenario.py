@@ -124,6 +124,7 @@ ALL_CIPHERS_PER_LIBCRYPTO_VERSION = {
     "openssl-1.0.2-fips"    : LEGACY_COMPATIBLE_CIPHERS,
     "libressl"              : LEGACY_COMPATIBLE_CIPHERS,
     "boringssl"             : LEGACY_COMPATIBLE_CIPHERS,
+    "awslc"                 : LEGACY_COMPATIBLE_CIPHERS,
 }
 
 class Curve():
@@ -150,7 +151,8 @@ class Curve():
 ALL_CURVES = [
     Curve("X25519", Version.TLS13),
     Curve("P-256", Version.SSLv3),
-    Curve("P-384", Version.SSLv3)
+    Curve("P-384", Version.SSLv3),
+    Curve("P-521", Version.SSLv3)
 ]
 
 # Older versions of Openssl, do not support X25519. Current versions of LibreSSL and BoringSSL use a different API
@@ -163,6 +165,7 @@ ALL_CURVES_PER_LIBCRYPTO_VERSION = {
     "openssl-1.0.2-fips"    : LEGACY_COMPATIBLE_CURVES,
     "libressl"              : LEGACY_COMPATIBLE_CURVES,
     "boringssl"             : LEGACY_COMPATIBLE_CURVES,
+    "awslc"                 : LEGACY_COMPATIBLE_CURVES,
 }
 
 

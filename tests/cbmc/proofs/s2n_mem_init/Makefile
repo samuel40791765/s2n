@@ -13,17 +13,18 @@
 
 CBMCFLAGS +=
 
-HARNESS_ENTRY = s2n_mem_init_harness
+PROOF_UID = s2n_mem_init
+HARNESS_ENTRY = $(PROOF_UID)_harness
 HARNESS_FILE = $(HARNESS_ENTRY).c
 
-PROOF_SOURCES += $(HARNESS_FILE)
+PROOF_SOURCES += $(PROOFDIR)/$(HARNESS_FILE)
 PROOF_SOURCES += $(PROOF_STUB)/s2n_calculate_stacktrace.c
 PROOF_SOURCES += $(PROOF_STUB)/sysconf.c
 
 PROJECT_SOURCES += $(SRCDIR)/utils/s2n_mem.c
 
 # We abstract this function because manual inspection demonstrates it is unreachable.
-REMOVE_FUNCTION_BODY += s2n_mem_cleanup_impl
+REMOVE_FUNCTION_BODY += __CPROVER_file_local_s2n_mem_c_s2n_mem_cleanup_impl
 
 UNWINDSET +=
 

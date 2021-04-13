@@ -83,10 +83,10 @@ int s2n_test_client_auth_negotiation(struct s2n_config *server_config, struct s2
     /* Negotiate handshake */
     EXPECT_SUCCESS(s2n_negotiate_test_server_and_client(server_conn, client_conn));
 
-    EXPECT_TRUE(IS_CLIENT_AUTH_HANDSHAKE(server_conn->handshake.handshake_type));
-    EXPECT_TRUE(IS_CLIENT_AUTH_HANDSHAKE(client_conn->handshake.handshake_type));
-    EXPECT_EQUAL(IS_CLIENT_AUTH_NO_CERT(server_conn->handshake.handshake_type), no_cert);
-    EXPECT_EQUAL(IS_CLIENT_AUTH_NO_CERT(client_conn->handshake.handshake_type), no_cert);
+    EXPECT_TRUE(IS_CLIENT_AUTH_HANDSHAKE(server_conn));
+    EXPECT_TRUE(IS_CLIENT_AUTH_HANDSHAKE(client_conn));
+    EXPECT_EQUAL(IS_CLIENT_AUTH_NO_CERT(server_conn), no_cert);
+    EXPECT_EQUAL(IS_CLIENT_AUTH_NO_CERT(client_conn), no_cert);
 
     const char *app_data_str = "APPLICATION_DATA";
     EXPECT_EQUAL(strcmp(app_data_str, s2n_connection_get_last_message_name(client_conn)), 0);
@@ -172,7 +172,7 @@ int s2n_test_client_auth_message_by_message(bool no_cert)
     EXPECT_SUCCESS(s2n_handshake_read_io(server_conn));
 
     EXPECT_EQUAL(server_conn->actual_protocol_version, S2N_TLS13); /* Server is now on TLS13 */
-    EXPECT_EQUAL(server_conn->handshake.handshake_type, NEGOTIATED | FULL_HANDSHAKE | CLIENT_AUTH);
+    EXPECT_EQUAL(server_conn->handshake.handshake_type, NEGOTIATED | FULL_HANDSHAKE | CLIENT_AUTH | MIDDLEBOX_COMPAT);
 
     EXPECT_SUCCESS(s2n_conn_set_handshake_type(server_conn));
 
@@ -225,7 +225,7 @@ int s2n_test_client_auth_message_by_message(bool no_cert)
     }
     EXPECT_SUCCESS(s2n_handshake_read_io(client_conn));
 
-    EXPECT_EQUAL(client_conn->handshake.handshake_type, NEGOTIATED | FULL_HANDSHAKE | CLIENT_AUTH);
+    EXPECT_EQUAL(client_conn->handshake.handshake_type, NEGOTIATED | FULL_HANDSHAKE | CLIENT_AUTH | MIDDLEBOX_COMPAT);
 
     /* Client reads ServerCert */
     EXPECT_EQUAL(s2n_conn_get_current_message_type(client_conn), SERVER_CERT);
@@ -248,11 +248,11 @@ int s2n_test_client_auth_message_by_message(bool no_cert)
     EXPECT_SUCCESS(s2n_handshake_write_io(client_conn));
 
     if (no_cert) {
-        EXPECT_EQUAL(client_conn->handshake.handshake_type, NEGOTIATED | FULL_HANDSHAKE | CLIENT_AUTH | NO_CLIENT_CERT);
+        EXPECT_EQUAL(client_conn->handshake.handshake_type, NEGOTIATED | FULL_HANDSHAKE | CLIENT_AUTH | NO_CLIENT_CERT | MIDDLEBOX_COMPAT);
     } else {
-        EXPECT_EQUAL(client_conn->handshake.handshake_type, NEGOTIATED | FULL_HANDSHAKE | CLIENT_AUTH);
+        EXPECT_EQUAL(client_conn->handshake.handshake_type, NEGOTIATED | FULL_HANDSHAKE | CLIENT_AUTH | MIDDLEBOX_COMPAT);
 
-        /*Client sends CertVerify */
+        /* Client sends CertVerify */
         EXPECT_EQUAL(s2n_conn_get_current_message_type(client_conn), CLIENT_CERT_VERIFY);
         EXPECT_SUCCESS(s2n_handshake_write_io(client_conn));
     }
@@ -271,9 +271,9 @@ int s2n_test_client_auth_message_by_message(bool no_cert)
     EXPECT_SUCCESS(s2n_handshake_read_io(server_conn));
 
     if (no_cert) {
-        EXPECT_EQUAL(server_conn->handshake.handshake_type, NEGOTIATED | FULL_HANDSHAKE | CLIENT_AUTH | NO_CLIENT_CERT);
+        EXPECT_EQUAL(server_conn->handshake.handshake_type, NEGOTIATED | FULL_HANDSHAKE | CLIENT_AUTH | NO_CLIENT_CERT | MIDDLEBOX_COMPAT);
     } else {
-        EXPECT_EQUAL(server_conn->handshake.handshake_type, NEGOTIATED | FULL_HANDSHAKE | CLIENT_AUTH);
+        EXPECT_EQUAL(server_conn->handshake.handshake_type, NEGOTIATED | FULL_HANDSHAKE | CLIENT_AUTH | MIDDLEBOX_COMPAT);
 
         /* Server reads CertVerify */
         EXPECT_EQUAL(s2n_conn_get_current_message_type(server_conn), CLIENT_CERT_VERIFY);

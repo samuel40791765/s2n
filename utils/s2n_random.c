@@ -24,13 +24,13 @@
 #include <fcntl.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <errno.h>
 #include <time.h>
 
-#include "utils/s2n_compiler.h"
+#include "s2n.h"
 
-/* clang can define gcc version to be < 4.3, but cpuid.h exists for most releases */
-#if ((defined(__x86_64__) || defined(__i386__)) && (defined(__clang__) || S2N_GCC_VERSION_AT_LEAST(4,3,0)))
+#if defined(S2N_CPUID_AVAILABLE)
 #include <cpuid.h>
 #endif
 
@@ -63,20 +63,71 @@ static int entropy_fd = UNINITIALIZED_ENTROPY_FD;
 static __thread struct s2n_drbg per_thread_private_drbg = {0};
 static __thread struct s2n_drbg per_thread_public_drbg = {0};
 
-#if !defined(MAP_INHERIT_ZERO)
-static __thread int zero_if_forked = 0;
+static void *zeroed_when_forked_page;
+static int zero = 0;
+
+static __thread void *zero_if_forked_ptr = &zero;
+#define zero_if_forked (* (int *) zero_if_forked_ptr)
+
+static int s2n_rand_init_impl(void);
+static int s2n_rand_cleanup_impl(void);
+static int s2n_rand_urandom_impl(void *ptr, uint32_t size);
+static int s2n_rand_rdrand_impl(void *ptr, uint32_t size);
+
+static s2n_rand_init_callback s2n_rand_init_cb = s2n_rand_init_impl;
+static s2n_rand_cleanup_callback s2n_rand_cleanup_cb = s2n_rand_cleanup_impl;
+static s2n_rand_seed_callback s2n_rand_seed_cb = s2n_rand_urandom_impl;
+static s2n_rand_mix_callback s2n_rand_mix_cb = s2n_rand_urandom_impl;
+
+bool s2n_cpu_supports_rdrand() {
+#if defined(S2N_CPUID_AVAILABLE)
+    uint32_t eax, ebx, ecx, edx;
+    if (!__get_cpuid(1, &eax, &ebx, &ecx, &edx)) {
+        return false;
+    }
+
+    if (ecx & RDRAND_ECX_FLAG) {
+        return true;
+    }
+#endif
+    return false;
+}
+
+int s2n_rand_set_callbacks(s2n_rand_init_callback rand_init_callback,
+                             s2n_rand_cleanup_callback rand_cleanup_callback,
+                             s2n_rand_seed_callback rand_seed_callback,
+                             s2n_rand_mix_callback rand_mix_callback)
+{
+    s2n_rand_init_cb = rand_init_callback;
+    s2n_rand_cleanup_cb = rand_cleanup_callback;
+    s2n_rand_seed_cb = rand_seed_callback;
+    s2n_rand_mix_cb = rand_mix_callback;
+
+    return S2N_SUCCESS;
+}
+
+S2N_RESULT s2n_get_seed_entropy(struct s2n_blob *blob)
+{
+    RESULT_ENSURE_REF(blob);
+
+    RESULT_GUARD_POSIX(s2n_rand_seed_cb(blob->data, blob->size));
+
+    return S2N_RESULT_OK;
+}
+
+S2N_RESULT s2n_get_mix_entropy(struct s2n_blob *blob)
+{
+    RESULT_ENSURE_REF(blob);
+
+    RESULT_GUARD_POSIX(s2n_rand_mix_cb(blob->data, blob->size));
+
+    return S2N_RESULT_OK;
+}
 
 void s2n_on_fork(void)
 {
     zero_if_forked = 0;
 }
-
-#else
-
-static __thread int *zero_if_forked_ptr;
-#define zero_if_forked (*zero_if_forked_ptr)
-
-#endif
 
 static inline S2N_RESULT s2n_defend_if_forked(void)
 {
@@ -87,10 +138,11 @@ static inline S2N_RESULT s2n_defend_if_forked(void)
 
     if (zero_if_forked == 0) {
         /* Clean up the old drbg first */
-        GUARD_RESULT(s2n_rand_cleanup_thread());
+        RESULT_GUARD(s2n_rand_cleanup_thread());
         /* Instantiate the new ones */
-        GUARD_AS_RESULT(s2n_drbg_instantiate(&per_thread_public_drbg, &public, S2N_AES_128_CTR_NO_DF_PR));
-        GUARD_AS_RESULT(s2n_drbg_instantiate(&per_thread_private_drbg, &private, S2N_AES_128_CTR_NO_DF_PR));
+        RESULT_GUARD_POSIX(s2n_drbg_instantiate(&per_thread_public_drbg, &public, S2N_AES_128_CTR_NO_DF_PR));
+        RESULT_GUARD_POSIX(s2n_drbg_instantiate(&per_thread_private_drbg, &private, S2N_AES_128_CTR_NO_DF_PR));
+        zero_if_forked_ptr = zeroed_when_forked_page;
         zero_if_forked = 1;
     }
 
@@ -99,38 +151,64 @@ static inline S2N_RESULT s2n_defend_if_forked(void)
 
 S2N_RESULT s2n_get_public_random_data(struct s2n_blob *blob)
 {
-    GUARD_RESULT(s2n_defend_if_forked());
-    GUARD_AS_RESULT(s2n_drbg_generate(&per_thread_public_drbg, blob));
+    RESULT_GUARD(s2n_defend_if_forked());
+
+    uint32_t offset = 0;
+    uint32_t remaining = blob->size;
+
+    while(remaining) {
+        struct s2n_blob slice = { 0 };
+
+        RESULT_GUARD_POSIX(s2n_blob_slice(blob, &slice, offset, MIN(remaining, S2N_DRBG_GENERATE_LIMIT)));;
+
+        RESULT_GUARD_POSIX(s2n_drbg_generate(&per_thread_public_drbg, &slice));
+
+        remaining -= slice.size;
+        offset += slice.size;
+    }
 
     return S2N_RESULT_OK;
 }
 
 S2N_RESULT s2n_get_private_random_data(struct s2n_blob *blob)
 {
-    GUARD_RESULT(s2n_defend_if_forked());
-    GUARD_AS_RESULT(s2n_drbg_generate(&per_thread_private_drbg, blob));
+    RESULT_GUARD(s2n_defend_if_forked());
+
+    uint32_t offset = 0;
+    uint32_t remaining = blob->size;
+
+    while(remaining) {
+        struct s2n_blob slice = { 0 };
+
+        RESULT_GUARD_POSIX(s2n_blob_slice(blob, &slice, offset, MIN(remaining, S2N_DRBG_GENERATE_LIMIT)));;
+
+        RESULT_GUARD_POSIX(s2n_drbg_generate(&per_thread_private_drbg, &slice));
+
+        remaining -= slice.size;
+        offset += slice.size;
+    }
 
     return S2N_RESULT_OK;
 }
 
 S2N_RESULT s2n_get_public_random_bytes_used(uint64_t *bytes_used)
 {
-    GUARD_AS_RESULT(s2n_drbg_bytes_used(&per_thread_public_drbg, bytes_used));
+    RESULT_GUARD_POSIX(s2n_drbg_bytes_used(&per_thread_public_drbg, bytes_used));
     return S2N_RESULT_OK;
 }
 
 S2N_RESULT s2n_get_private_random_bytes_used(uint64_t *bytes_used)
 {
-    GUARD_AS_RESULT(s2n_drbg_bytes_used(&per_thread_private_drbg, bytes_used));
+    RESULT_GUARD_POSIX(s2n_drbg_bytes_used(&per_thread_private_drbg, bytes_used));
     return S2N_RESULT_OK;
 }
 
-S2N_RESULT s2n_get_urandom_data(struct s2n_blob *blob)
+static int s2n_rand_urandom_impl(void *ptr, uint32_t size)
 {
-    ENSURE(entropy_fd != UNINITIALIZED_ENTROPY_FD, S2N_ERR_NOT_INITIALIZED);
+    POSIX_ENSURE(entropy_fd != UNINITIALIZED_ENTROPY_FD, S2N_ERR_NOT_INITIALIZED);
 
-    uint32_t n = blob->size;
-    uint8_t *data = blob->data;
+    uint8_t *data = ptr;
+    uint32_t n = size;
     struct timespec sleep_time = {.tv_sec = 0, .tv_nsec = 0 };
     long backoff = 1;
 
@@ -172,7 +250,7 @@ S2N_RESULT s2n_get_urandom_data(struct s2n_blob *blob)
         n -= r;
     }
 
-    return S2N_RESULT_OK;
+    return S2N_SUCCESS;
 }
 
 /*
@@ -182,11 +260,11 @@ S2N_RESULT s2n_public_random(int64_t bound, uint64_t *output)
 {
     uint64_t r;
 
-    ENSURE_GT(bound, 0);
+    RESULT_ENSURE_GT(bound, 0);
 
     while (1) {
         struct s2n_blob blob = {.data = (void *)&r, sizeof(r) };
-        GUARD_RESULT(s2n_get_public_random_data(&blob));
+        RESULT_GUARD(s2n_get_public_random_data(&blob));
 
         /* Imagine an int was one byte and UINT_MAX was 256. If the
          * caller asked for s2n_random(129, ...) we'd end up in
@@ -240,7 +318,7 @@ RAND_METHOD s2n_openssl_rand_method = {
 };
 #endif
 
-S2N_RESULT s2n_rand_init(void)
+static int s2n_rand_init_impl(void)
 {
   OPEN:
     entropy_fd = open(ENTROPY_SOURCE, O_RDONLY);
@@ -248,50 +326,83 @@ S2N_RESULT s2n_rand_init(void)
         if (errno == EINTR) {
             goto OPEN;
         }
-        BAIL(S2N_ERR_OPEN_RANDOM);
+        POSIX_BAIL(S2N_ERR_OPEN_RANDOM);
     }
+
+    if (s2n_cpu_supports_rdrand()) {
+       s2n_rand_mix_cb = s2n_rand_rdrand_impl;
+    }
+
+    return S2N_SUCCESS;
+}
+
+S2N_RESULT s2n_rand_init(void)
+{
+    uint32_t pagesize;
+
+    RESULT_GUARD_POSIX(s2n_rand_init_cb());
+
+    pagesize = s2n_mem_get_page_size();
+
+    /* We need a single-aligned page for our protected memory region */
+    RESULT_ENSURE(posix_memalign(&zeroed_when_forked_page, pagesize, pagesize) == S2N_SUCCESS, S2N_ERR_OPEN_RANDOM);
+    RESULT_ENSURE(zeroed_when_forked_page != NULL, S2N_ERR_OPEN_RANDOM);
+
+    /* Initialized to zero to ensure that we seed our DRBGs */
+    zero_if_forked = 0;
+
+    /* INHERIT_ZERO and WIPEONFORK reset a page to all-zeroes when a fork occurs */
 #if defined(MAP_INHERIT_ZERO)
-    zero_if_forked_ptr = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
-    ENSURE(zero_if_forked_ptr != MAP_FAILED, S2N_ERR_OPEN_RANDOM);
-
-    ENSURE(minherit(zero_if_forked_ptr, sizeof(int), MAP_INHERIT_ZERO) != S2N_FAILURE, S2N_ERR_OPEN_RANDOM);
-#else
-
-    ENSURE(pthread_atfork(NULL, NULL, s2n_on_fork) == S2N_SUCCESS, S2N_ERR_OPEN_RANDOM);
+    RESULT_ENSURE(minherit(zeroed_when_forked_page, pagesize, MAP_INHERIT_ZERO) != S2N_FAILURE, S2N_ERR_OPEN_RANDOM);
 #endif
 
-    GUARD_RESULT(s2n_defend_if_forked());
+#if defined(MADV_WIPEONFORK)
+    RESULT_ENSURE(madvise(zeroed_when_forked_page, pagesize, MADV_WIPEONFORK) == S2N_SUCCESS, S2N_ERR_OPEN_RANDOM);
+#endif
+
+    /* For defence in depth */
+    RESULT_ENSURE(pthread_atfork(NULL, NULL, s2n_on_fork) == S2N_SUCCESS, S2N_ERR_OPEN_RANDOM);
+
+    /* Seed everything */
+    RESULT_GUARD(s2n_defend_if_forked());
 
 #if S2N_LIBCRYPTO_SUPPORTS_CUSTOM_RAND
     /* Create an engine */
     ENGINE *e = ENGINE_new();
 
-    ENSURE(e != NULL, S2N_ERR_OPEN_RANDOM);
-    GUARD_RESULT_OSSL(ENGINE_set_id(e, "s2n_rand"), S2N_ERR_OPEN_RANDOM);
-    GUARD_RESULT_OSSL(ENGINE_set_name(e, "s2n entropy generator"), S2N_ERR_OPEN_RANDOM);
-    GUARD_RESULT_OSSL(ENGINE_set_flags(e, ENGINE_FLAGS_NO_REGISTER_ALL), S2N_ERR_OPEN_RANDOM);
-    GUARD_RESULT_OSSL(ENGINE_set_init_function(e, s2n_openssl_compat_init), S2N_ERR_OPEN_RANDOM);
-    GUARD_RESULT_OSSL(ENGINE_set_RAND(e, &s2n_openssl_rand_method), S2N_ERR_OPEN_RANDOM);
-    GUARD_RESULT_OSSL(ENGINE_add(e), S2N_ERR_OPEN_RANDOM);
-    GUARD_RESULT_OSSL(ENGINE_free(e) , S2N_ERR_OPEN_RANDOM);
+    RESULT_ENSURE(e != NULL, S2N_ERR_OPEN_RANDOM);
+    RESULT_GUARD_OSSL(ENGINE_set_id(e, "s2n_rand"), S2N_ERR_OPEN_RANDOM);
+    RESULT_GUARD_OSSL(ENGINE_set_name(e, "s2n entropy generator"), S2N_ERR_OPEN_RANDOM);
+    RESULT_GUARD_OSSL(ENGINE_set_flags(e, ENGINE_FLAGS_NO_REGISTER_ALL), S2N_ERR_OPEN_RANDOM);
+    RESULT_GUARD_OSSL(ENGINE_set_init_function(e, s2n_openssl_compat_init), S2N_ERR_OPEN_RANDOM);
+    RESULT_GUARD_OSSL(ENGINE_set_RAND(e, &s2n_openssl_rand_method), S2N_ERR_OPEN_RANDOM);
+    RESULT_GUARD_OSSL(ENGINE_add(e), S2N_ERR_OPEN_RANDOM);
+    RESULT_GUARD_OSSL(ENGINE_free(e) , S2N_ERR_OPEN_RANDOM);
 
     /* Use that engine for rand() */
     e = ENGINE_by_id("s2n_rand");
-    ENSURE(e != NULL, S2N_ERR_OPEN_RANDOM);
-    GUARD_RESULT_OSSL(ENGINE_init(e), S2N_ERR_OPEN_RANDOM);
-    GUARD_RESULT_OSSL(ENGINE_set_default(e, ENGINE_METHOD_RAND), S2N_ERR_OPEN_RANDOM);
-    GUARD_RESULT_OSSL(ENGINE_free(e), S2N_ERR_OPEN_RANDOM);
+    RESULT_ENSURE(e != NULL, S2N_ERR_OPEN_RANDOM);
+    RESULT_GUARD_OSSL(ENGINE_init(e), S2N_ERR_OPEN_RANDOM);
+    RESULT_GUARD_OSSL(ENGINE_set_default(e, ENGINE_METHOD_RAND), S2N_ERR_OPEN_RANDOM);
+    RESULT_GUARD_OSSL(ENGINE_free(e), S2N_ERR_OPEN_RANDOM);
 #endif
 
     return S2N_RESULT_OK;
 }
 
+static int s2n_rand_cleanup_impl(void)
+{
+    POSIX_ENSURE(entropy_fd != UNINITIALIZED_ENTROPY_FD, S2N_ERR_NOT_INITIALIZED);
+
+    POSIX_GUARD(close(entropy_fd));
+    entropy_fd = UNINITIALIZED_ENTROPY_FD;
+
+    return S2N_SUCCESS;
+}
+
 S2N_RESULT s2n_rand_cleanup(void)
 {
-    ENSURE(entropy_fd != UNINITIALIZED_ENTROPY_FD, S2N_ERR_NOT_INITIALIZED);
-
-    GUARD_AS_RESULT(close(entropy_fd));
-    entropy_fd = UNINITIALIZED_ENTROPY_FD;
+    RESULT_GUARD_POSIX(s2n_rand_cleanup_cb());
 
 #if S2N_LIBCRYPTO_SUPPORTS_CUSTOM_RAND
     /* Cleanup our rand ENGINE in libcrypto */
@@ -303,13 +414,18 @@ S2N_RESULT s2n_rand_cleanup(void)
     }
 #endif
 
+    s2n_rand_init_cb = s2n_rand_init_impl;
+    s2n_rand_cleanup_cb = s2n_rand_cleanup_impl;
+    s2n_rand_seed_cb = s2n_rand_urandom_impl;
+    s2n_rand_mix_cb = s2n_rand_urandom_impl;
+
     return S2N_RESULT_OK;
 }
 
 S2N_RESULT s2n_rand_cleanup_thread(void)
 {
-    GUARD_AS_RESULT(s2n_drbg_wipe(&per_thread_private_drbg));
-    GUARD_AS_RESULT(s2n_drbg_wipe(&per_thread_public_drbg));
+    RESULT_GUARD_POSIX(s2n_drbg_wipe(&per_thread_private_drbg));
+    RESULT_GUARD_POSIX(s2n_drbg_wipe(&per_thread_public_drbg));
 
     return S2N_RESULT_OK;
 }
@@ -320,37 +436,21 @@ S2N_RESULT s2n_rand_cleanup_thread(void)
  */
 S2N_RESULT s2n_set_private_drbg_for_test(struct s2n_drbg drbg)
 {
-    ENSURE(s2n_in_unit_test(), S2N_ERR_NOT_IN_UNIT_TEST);
-    GUARD_AS_RESULT(s2n_drbg_wipe(&per_thread_private_drbg));
+    RESULT_ENSURE(s2n_in_unit_test(), S2N_ERR_NOT_IN_UNIT_TEST);
+    RESULT_GUARD_POSIX(s2n_drbg_wipe(&per_thread_private_drbg));
 
     per_thread_private_drbg = drbg;
     return S2N_RESULT_OK;
-}
-
-
-bool s2n_cpu_supports_rdrand()
-{
-#if ((defined(__x86_64__) || defined(__i386__)) && (defined(__clang__) || S2N_GCC_VERSION_AT_LEAST(4,3,0)))
-    uint32_t eax, ebx, ecx, edx;
-    if (!__get_cpuid(1, &eax, &ebx, &ecx, &edx)) {
-        return false;
-    }
-
-    if (ecx & RDRAND_ECX_FLAG) {
-        return true;
-    }
-#endif
-    return false;
 }
 
 /*
  * volatile is important to prevent the compiler from
  * re-ordering or optimizing the use of RDRAND.
  */
-S2N_RESULT s2n_get_rdrand_data(struct s2n_blob *out)
+static int s2n_rand_rdrand_impl(void *data, uint32_t size)
 {
-
 #if defined(__x86_64__) || defined(__i386__)
+    struct s2n_blob out = { .data = data, .size = size };
     int space_remaining = 0;
     struct s2n_stuffer stuffer = {0};
     union {
@@ -365,7 +465,7 @@ S2N_RESULT s2n_get_rdrand_data(struct s2n_blob *out)
         uint8_t u8[8];
     } output;
 
-    GUARD_AS_RESULT(s2n_stuffer_init(&stuffer, out));
+    POSIX_GUARD(s2n_stuffer_init(&stuffer, &out));
     while ((space_remaining = s2n_stuffer_space_remaining(&stuffer))) {
         unsigned char success = 0;
         output.u64 = 0;
@@ -434,15 +534,15 @@ S2N_RESULT s2n_get_rdrand_data(struct s2n_blob *out)
             }
         }
 
-        ENSURE(success, S2N_ERR_RDRAND_FAILED);
+        POSIX_ENSURE(success, S2N_ERR_RDRAND_FAILED);
 
         int data_to_fill = MIN(sizeof(output), space_remaining);
 
-        GUARD_AS_RESULT(s2n_stuffer_write_bytes(&stuffer, output.u8, data_to_fill));
+        POSIX_GUARD(s2n_stuffer_write_bytes(&stuffer, output.u8, data_to_fill));
     }
 
-    return S2N_RESULT_OK;
+    return S2N_SUCCESS;
 #else
-    BAIL(S2N_ERR_UNSUPPORTED_CPU);
+    POSIX_BAIL(S2N_ERR_UNSUPPORTED_CPU);
 #endif
 }

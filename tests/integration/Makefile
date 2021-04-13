@@ -28,12 +28,22 @@ ifeq ($(S2N_CORKED_IO),true)
 	HANDSHAKE_TEST_PARAMS:=--use_corked_io $(HANDSHAKE_TEST_PARAMS)
 endif
 
-.PHONY : all
-ifdef S2N_NO_PQ
-all: tls13 client_endpoints dynamic_record old_s_client s_client s_server gnutls_cli gnutls_serv sslyze
-else
-all: tls13 client_endpoints dynamic_record old_s_client s_client s_server gnutls_cli gnutls_serv sslyze pq_handshake
+ifeq ($(OPENSSL_0_9_8_INSTALL_DIR),)
+	OPENSSL_0_9_8_INSTALL_DIR:=${CURDIR}/../../test-deps/openssl-0.9.8
 endif
+
+TESTS = tls13 client_endpoints dynamic_record old_s_client s_client s_server gnutls_cli gnutls_serv
+
+.PHONY : all
+ifndef S2N_NO_PQ
+TESTS += pq_handshake
+endif
+
+ifneq (S2N_NO_SSLYZE, "true")
+TESTS += sslyze
+endif
+
+all: $(TESTS)
 
 tls13:
 	( \

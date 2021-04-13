@@ -31,6 +31,14 @@
 __thread int s2n_errno;
 __thread const char *s2n_debug_str;
 
+/**
+ * Returns the address of the thread-local `s2n_errno` variable
+ */
+int *s2n_errno_location()
+{
+    return &s2n_errno;
+}
+
 static const char *no_such_language = "Language is not supported for error translation";
 static const char *no_such_error = "Internal s2n error";
 
@@ -50,6 +58,7 @@ static const char *no_such_error = "Internal s2n error";
     ERR_ENTRY(S2N_ERR_DECRYPT, "error decrypting data") \
     ERR_ENTRY(S2N_ERR_BAD_MESSAGE, "Bad message encountered") \
     ERR_ENTRY(S2N_ERR_KEY_INIT, "error initializing encryption key") \
+    ERR_ENTRY(S2N_ERR_KEY_DESTROY, "error destroying encryption key") \
     ERR_ENTRY(S2N_ERR_DH_SERIALIZING, "error serializing Diffie-Hellman parameters") \
     ERR_ENTRY(S2N_ERR_DH_SHARED_SECRET, "error computing Diffie-Hellman shared secret") \
     ERR_ENTRY(S2N_ERR_DH_WRITING_PUBLIC_KEY, "error writing Diffie-Hellman public key") \
@@ -70,7 +79,6 @@ static const char *no_such_error = "Internal s2n error";
     ERR_ENTRY(S2N_ERR_DECODE_PRIVATE_KEY, "error decoding private key") \
     ERR_ENTRY(S2N_ERR_INVALID_SIGNATURE_ALGORITHM, "Invalid signature algorithm") \
     ERR_ENTRY(S2N_ERR_INVALID_SIGNATURE_SCHEME, "Invalid signature scheme") \
-    ERR_ENTRY(S2N_ERR_EMPTY_SIGNATURE_SCHEME, "Empty signature scheme") \
     ERR_ENTRY(S2N_ERR_CBC_VERIFY, "Failed CBC verification") \
     ERR_ENTRY(S2N_ERR_DH_COPYING_PUBLIC_KEY, "error copying Diffie-Hellman public key") \
     ERR_ENTRY(S2N_ERR_SIGN, "error signing data") \
@@ -89,7 +97,7 @@ static const char *no_such_error = "Internal s2n error";
     ERR_ENTRY(S2N_ERR_CERT_TYPE_UNSUPPORTED, "Certificate Type is unsupported") \
     ERR_ENTRY(S2N_ERR_INVALID_MAX_FRAG_LEN, "invalid Maximum Fragmentation Length encountered") \
     ERR_ENTRY(S2N_ERR_MAX_FRAG_LEN_MISMATCH, "Negotiated Maximum Fragmentation Length from server does not match the requested length by client") \
-    ERR_ENTRY(S2N_ERR_PROTOCOL_VERSION_UNSUPPORTED, "TLS protocol version is not supported by selected cipher suite") \
+    ERR_ENTRY(S2N_ERR_PROTOCOL_VERSION_UNSUPPORTED, "TLS protocol version is not supported by configuration") \
     ERR_ENTRY(S2N_ERR_BAD_KEY_SHARE, "Bad key share received") \
     ERR_ENTRY(S2N_ERR_CANCELLED, "handshake was cancelled") \
     ERR_ENTRY(S2N_ERR_PROTOCOL_DOWNGRADE_DETECTED, "Protocol downgrade detected by client") \
@@ -139,6 +147,7 @@ static const char *no_such_error = "Internal s2n error";
     ERR_ENTRY(S2N_ERR_INITIAL_HMAC, "error calling EVP_CIPHER_CTX_ctrl for composite cbc cipher") \
     ERR_ENTRY(S2N_ERR_INVALID_NONCE_TYPE, "Invalid AEAD nonce type") \
     ERR_ENTRY(S2N_ERR_UNIMPLEMENTED, "Unimplemented feature") \
+    ERR_ENTRY(S2N_ERR_HANDSHAKE_UNREACHABLE, "Unreachable handshake state machine handler invoked") \
     ERR_ENTRY(S2N_ERR_READ, "error calling read") \
     ERR_ENTRY(S2N_ERR_WRITE, "error calling write") \
     ERR_ENTRY(S2N_ERR_BAD_FD, "Invalid file descriptor") \
@@ -161,13 +170,14 @@ static const char *no_such_error = "Internal s2n error";
     ERR_ENTRY(S2N_ERR_ARRAY_INDEX_OOB, "Array index out of bounds") \
     ERR_ENTRY(S2N_ERR_FREE_STATIC_BLOB, "Cannot free a static blob") \
     ERR_ENTRY(S2N_ERR_RESIZE_STATIC_BLOB, "Cannot resize a static blob") \
-    ERR_ENTRY(S2N_ERR_NO_AVAILABLE_BORINGSSL_API, "BoringSSL does not support this API") \
+    ERR_ENTRY(S2N_ERR_NO_SUPPORTED_LIBCRYPTO_API, "libcrypto does not support this API") \
     ERR_ENTRY(S2N_ERR_RECORD_LENGTH_TOO_LARGE, "Record length exceeds protocol version maximum") \
     ERR_ENTRY(S2N_ERR_SET_DUPLICATE_VALUE, "Set already contains the provided value") \
     ERR_ENTRY(S2N_ERR_ASYNC_CALLBACK_FAILED, "Callback associated with async private keys function has failed") \
     ERR_ENTRY(S2N_ERR_ASYNC_MORE_THAN_ONE, "Only one asynchronous operation can be in-progress at the same time") \
     ERR_ENTRY(S2N_ERR_NO_ALERT, "No Alert present") \
-    ERR_ENTRY(S2N_ERR_CLIENT_MODE, "operation not allowed in client mode") \
+    ERR_ENTRY(S2N_ERR_SERVER_MODE, "Operation not allowed in server mode") \
+    ERR_ENTRY(S2N_ERR_CLIENT_MODE, "Operation not allowed in client mode") \
     ERR_ENTRY(S2N_ERR_CLIENT_MODE_DISABLED, "client connections not allowed") \
     ERR_ENTRY(S2N_ERR_TOO_MANY_CERTIFICATES, "only 1 certificate is supported in client mode") \
     ERR_ENTRY(S2N_ERR_TOO_MANY_SIGNATURE_SCHEMES, "Max supported length of SignatureAlgorithms/SignatureSchemes list is 32") \
@@ -184,7 +194,7 @@ static const char *no_such_error = "Internal s2n error";
     ERR_ENTRY(S2N_ERR_NUM_DEFAULT_CERTIFICATES, "exceeded max default certificates or provided no default") \
     ERR_ENTRY(S2N_ERR_MULTIPLE_DEFAULT_CERTIFICATES_PER_AUTH_TYPE, "setting multiple default certificates per auth type is not allowed") \
     ERR_ENTRY(S2N_ERR_INVALID_CIPHER_PREFERENCES, "Invalid Cipher Preferences version") \
-    ERR_ENTRY(S2N_ERR_APPLICATION_PROTOCOL_TOO_LONG, "Application protocol name is too long") \
+    ERR_ENTRY(S2N_ERR_INVALID_APPLICATION_PROTOCOL, "The supplied application protocol name is invalid") \
     ERR_ENTRY(S2N_ERR_KEY_MISMATCH, "public and private key do not match") \
     ERR_ENTRY(S2N_ERR_SEND_SIZE, "Retried s2n_send() size is invalid") \
     ERR_ENTRY(S2N_ERR_CORK_SET_ON_UNMANAGED, "Attempt to set connection cork management on unmanaged IO") \
@@ -214,7 +224,6 @@ static const char *no_such_error = "Internal s2n error";
     ERR_ENTRY(S2N_ERR_SESSION_TICKET_NOT_SUPPORTED, "Session ticket not supported for this connection") \
     ERR_ENTRY(S2N_ERR_OCSP_NOT_SUPPORTED, "OCSP stapling was requested, but is not supported") \
     ERR_ENTRY(S2N_ERR_INVALID_SIGNATURE_ALGORITHMS_PREFERENCES, "Invalid signature algorithms preferences version") \
-    ERR_ENTRY(S2N_ERR_PQ_KEMS_DISALLOWED_IN_FIPS, "PQ KEMs are disallowed while in FIPS mode") \
     ERR_ENTRY(S2N_RSA_PSS_NOT_SUPPORTED, "RSA-PSS signing not supported by underlying libcrypto implementation") \
     ERR_ENTRY(S2N_ERR_MAX_INNER_PLAINTEXT_SIZE, "Inner plaintext size exceeds limit") \
     ERR_ENTRY(S2N_ERR_INVALID_ECC_PREFERENCES, "Invalid ecc curves preferences version") \
@@ -234,6 +243,25 @@ static const char *no_such_error = "Internal s2n error";
     ERR_ENTRY(S2N_ERR_ASYNC_APPLY_WHILE_INVOKING, "Async private key operation cannot consumed inside async pkey callback") \
     ERR_ENTRY(S2N_ERR_ASYNC_ALREADY_APPLIED, "Async operation was already applied to connection, cannot apply it again") \
     ERR_ENTRY(S2N_ERR_INVALID_HELLO_RETRY, "Invalid hello retry request") \
+    ERR_ENTRY(S2N_ERR_INVALID_STATE, "Invalid state, this is the result of invalid use of an API. Check the API documentation for the function that raised this error for more info") \
+    ERR_ENTRY(S2N_ERR_UNSUPPORTED_WITH_QUIC, "Functionality not supported when running with QUIC support enabled") \
+    ERR_ENTRY(S2N_ERR_PQ_CRYPTO, "An error occurred in a post-quantum crypto function") \
+    ERR_ENTRY(S2N_ERR_PQ_DISABLED, "Post-quantum crypto is disabled") \
+    ERR_ENTRY(S2N_ERR_DUPLICATE_PSK_IDENTITIES, "The list of pre-shared keys provided contains duplicate psk identities") \
+    ERR_ENTRY(S2N_ERR_OFFERED_PSKS_TOO_LONG, "The total pre-shared key data is too long to send over the wire") \
+    ERR_ENTRY(S2N_ERR_INVALID_SESSION_TICKET, "Session ticket data is not valid") \
+    ERR_ENTRY(S2N_ERR_REENTRANCY, "Original execution must complete before method can be called again") \
+    ERR_ENTRY(S2N_ERR_INVALID_CERT_STATE, "Certificate validation entered an invalid state and is not able to continue") \
+    ERR_ENTRY(S2N_ERR_INVALID_EARLY_DATA_STATE, "Early data in invalid state") \
+    ERR_ENTRY(S2N_ERR_EARLY_DATA_NOT_ALLOWED, "Early data is not allowed by the connection") \
+    ERR_ENTRY(S2N_ERR_NO_CERT_FOUND, "Certificate not found") \
+    ERR_ENTRY(S2N_ERR_CERT_NOT_VALIDATED, "Certificate not validated") \
+    ERR_ENTRY(S2N_ERR_MAX_EARLY_DATA_SIZE, "Maximum early data bytes exceeded") \
+    ERR_ENTRY(S2N_ERR_EARLY_DATA_BLOCKED, "Blocked on early data") \
+    ERR_ENTRY(S2N_ERR_PSK_MODE, "Mixing resumption and external PSKs is not supported") \
+    ERR_ENTRY(S2N_ERR_X509_EXTENSION_VALUE_NOT_FOUND, "X509 extension value not found") \
+    ERR_ENTRY(S2N_ERR_INVALID_X509_EXTENSION_TYPE, "Invalid X509 extension type") \
+    ERR_ENTRY(S2N_ERR_INSUFFICIENT_MEM_SIZE, "The provided buffer size is not large enough to contain the output data. Try increasing the allocation size.") \
 
 /* clang-format on */
 
@@ -354,7 +382,7 @@ int s2n_calculate_stacktrace(void)
     }
 
     int old_errno = errno;
-    GUARD(s2n_free_stacktrace());
+    POSIX_GUARD(s2n_free_stacktrace());
     void *array[MAX_BACKTRACE_DEPTH];
     tl_stacktrace.trace_size = backtrace(array, MAX_BACKTRACE_DEPTH);
     tl_stacktrace.trace = backtrace_symbols(array, tl_stacktrace.trace_size);
@@ -372,7 +400,7 @@ int s2n_print_stacktrace(FILE *fptr)
     if (!s_s2n_stack_traces_enabled) {
       fprintf(fptr, "%s\n%s\n",
 	      "NOTE: Some details are omitted, run with S2N_PRINT_STACKTRACE=1 for a verbose backtrace.",
-	      "See https://github.com/awslabs/s2n/blob/master/docs/USAGE-GUIDE.md");
+	      "See https://github.com/awslabs/s2n/blob/main/docs/USAGE-GUIDE.md");
         return S2N_SUCCESS;
     }
 

@@ -15,7 +15,7 @@
 
 #include "utils/s2n_asn1_time.h"
 #include "utils/s2n_result.h"
-#include "s2n_safety.h"
+#include "utils/s2n_safety.h"
 
 #include <time.h>
 #include <ctype.h>
@@ -62,7 +62,7 @@ static inline void get_current_timesettings(long *gmt_offset, int *is_dst) {
     *is_dst = time_ptr.tm_isdst;
 }
 
-#define PARSE_DIGIT(c, d)  do { ENSURE(isdigit(c), S2N_ERR_SAFETY); d = c - '0'; } while(0)
+#define PARSE_DIGIT(c, d)  do { RESULT_ENSURE(isdigit(c), S2N_ERR_SAFETY); d = c - '0'; } while(0)
 
 /* this is just a standard state machine for ASN1 date format... nothing special.
  * just do a character at a time and change the state per character encountered.
@@ -176,7 +176,7 @@ static S2N_RESULT process_state(parser_state *state, char current_char, struct p
                 *state = ON_SUBSECOND;
                 return S2N_RESULT_OK;
             }
-        /* fall through */
+            FALL_THROUGH;
         case ON_TIMEZONE:
             if (current_char == 'Z' || current_char == 'z') {
                 args->local_time_assumed = 0;
@@ -255,15 +255,15 @@ S2N_RESULT s2n_asn1_time_to_nano_since_epoch_ticks(const char *asn1_time, uint32
 
     while (state < FINISHED && current_pos < str_len) {
         char current_char = asn1_time[current_pos];
-        ENSURE_OK(process_state(&state, current_char, &args), S2N_ERR_INVALID_ARGUMENT);
+        RESULT_ENSURE_OK(process_state(&state, current_char, &args), S2N_ERR_INVALID_ARGUMENT);
         current_pos++;
     }
 
     /* state on subsecond means no timezone info was found and we assume local time */
-    ENSURE(state == FINISHED || state == ON_SUBSECOND, S2N_ERR_INVALID_ARGUMENT);
+    RESULT_ENSURE(state == FINISHED || state == ON_SUBSECOND, S2N_ERR_INVALID_ARGUMENT);
 
     time_t clock_data = mktime(&args.time);
-    ENSURE_GTE(clock_data, 0);
+    RESULT_ENSURE_GTE(clock_data, 0);
 
     /* ASN1 + and - is in format HHMM. We need to convert it to seconds for the adjustment */
     long gmt_offset = (args.offset_hours * 3600) + (args.offset_minutes * 60);
@@ -280,7 +280,7 @@ S2N_RESULT s2n_asn1_time_to_nano_since_epoch_ticks(const char *asn1_time, uint32
         gmt_offset -= args.time.tm_isdst != is_dst ? (args.time.tm_isdst - is_dst) * 3600 : 0;
     }
 
-    ENSURE_GTE(clock_data, gmt_offset);
+    RESULT_ENSURE_GTE(clock_data, gmt_offset);
 
     /* convert to nanoseconds and add the timezone offset. */
     *ticks = ((uint64_t) clock_data - gmt_offset) * 1000000000;
