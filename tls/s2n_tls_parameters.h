@@ -65,9 +65,11 @@
 #define TLS_EXTENSION_PQ_KEM_PARAMETERS 0xFE01
 #define TLS_PQ_KEM_EXTENSION_ID_BIKE1_L1_R1 1
 #define TLS_PQ_KEM_EXTENSION_ID_BIKE1_L1_R2 13
+#define TLS_PQ_KEM_EXTENSION_ID_BIKE1_L1_R3 25
 #define TLS_PQ_KEM_EXTENSION_ID_SIKE_P503_R1 10
 #define TLS_PQ_KEM_EXTENSION_ID_SIKE_P434_R2 19
 #define TLS_PQ_KEM_EXTENSION_ID_KYBER_512_R2 23
+#define TLS_PQ_KEM_EXTENSION_ID_KYBER_512_90S_R2 24
 
 /* TLS 1.3 hybrid post-quantum definitions are from the proposed reserved range defined
  * in https://tools.ietf.org/html/draft-stebila-tls-hybrid-design. Values for interoperability
@@ -76,6 +78,8 @@
 #define TLS_PQ_KEM_GROUP_ID_SECP256R1_SIKE_P434_R2 0x2F1F
 #define TLS_PQ_KEM_GROUP_ID_X25519_BIKE1_L1_R2 0x2F28
 #define TLS_PQ_KEM_GROUP_ID_SECP256R1_BIKE1_L1_R2 0x2F23
+#define TLS_PQ_KEM_GROUP_ID_X25519_KYBER_512_R2 0x2F26
+#define TLS_PQ_KEM_GROUP_ID_SECP256R1_KYBER_512_R2 0x2F0F
 
 /* From https://tools.ietf.org/html/rfc7507 */
 #define TLS_FALLBACK_SCSV                   0x56, 0x00
@@ -98,13 +102,28 @@
 #define TLS_EXTENSION_ALPN                 16
 #define TLS_EXTENSION_SCT_LIST             18
 #define TLS_EXTENSION_SESSION_TICKET       35
+#define TLS_EXTENSION_PRE_SHARED_KEY       41
 #define TLS_EXTENSION_CERT_AUTHORITIES     47
 #define TLS_EXTENSION_RENEGOTIATION_INFO   65281
 
 /* TLS 1.3 extensions from https://tools.ietf.org/html/rfc8446#section-4.2 */
-#define TLS_EXTENSION_SUPPORTED_VERSIONS   43
-#define TLS_EXTENSION_COOKIE               44
-#define TLS_EXTENSION_KEY_SHARE            51
+#define TLS_EXTENSION_EARLY_DATA             42
+#define TLS_EXTENSION_SUPPORTED_VERSIONS     43
+#define TLS_EXTENSION_COOKIE                 44
+#define TLS_EXTENSION_PSK_KEY_EXCHANGE_MODES 45
+#define TLS_EXTENSION_KEY_SHARE              51
+
+/* TLS 1.3 pre-shared key exchange modes from https://tools.ietf.org/html/rfc8446#section-4.2.9 */
+#define TLS_PSK_KE_MODE     0
+#define TLS_PSK_DHE_KE_MODE 1
+
+/**
+ *= https://tools.ietf.org/id/draft-ietf-quic-tls-32.txt#8.2
+ *#   enum {
+ *#      quic_transport_parameters(0xffa5), (65535)
+ *#   } ExtensionType;
+ */
+#define TLS_QUIC_TRANSPORT_PARAMETERS      0xffa5
 
 /* TLS Signature Algorithms - RFC 5246 7.4.1.4.1 */
 /* https://www.iana.org/assignments/tls-parameters/tls-parameters.xhtml#tls-parameters-16 */
@@ -182,6 +201,7 @@
 /* Elliptic curves from https://www.iana.org/assignments/tls-parameters/tls-parameters.xhtml#tls-parameters-8 */
 #define TLS_EC_CURVE_SECP_256_R1           23
 #define TLS_EC_CURVE_SECP_384_R1           24
+#define TLS_EC_CURVE_SECP_521_R1           25
 #define TLS_EC_CURVE_ECDH_X25519           29
 
 /* Ethernet maximum transmission unit (MTU)

@@ -54,6 +54,7 @@ static int wait_for_event(int fd, s2n_blocked_status blocked)
     case S2N_BLOCKED_ON_WRITE:
         reader.events |= POLLOUT;
         break;
+    case S2N_BLOCKED_ON_EARLY_DATA:
     case S2N_BLOCKED_ON_APPLICATION_INPUT:
         /* This case is not encountered by the s2nc/s2nd applications,
          * but is detected for completeness */
@@ -94,19 +95,19 @@ int negotiate(struct s2n_connection *conn, int fd)
 
     if ((client_hello_version = s2n_connection_get_client_hello_version(conn)) < 0) {
         fprintf(stderr, "Could not get client hello version\n");
-        S2N_ERROR(S2N_ERR_CLIENT_HELLO_VERSION);
+        POSIX_BAIL(S2N_ERR_CLIENT_HELLO_VERSION);
     }
     if ((client_protocol_version = s2n_connection_get_client_protocol_version(conn)) < 0) {
         fprintf(stderr, "Could not get client protocol version\n");
-        S2N_ERROR(S2N_ERR_CLIENT_PROTOCOL_VERSION);
+        POSIX_BAIL(S2N_ERR_CLIENT_PROTOCOL_VERSION);
     }
     if ((server_protocol_version = s2n_connection_get_server_protocol_version(conn)) < 0) {
         fprintf(stderr, "Could not get server protocol version\n");
-        S2N_ERROR(S2N_ERR_SERVER_PROTOCOL_VERSION);
+        POSIX_BAIL(S2N_ERR_SERVER_PROTOCOL_VERSION);
     }
     if ((actual_protocol_version = s2n_connection_get_actual_protocol_version(conn)) < 0) {
         fprintf(stderr, "Could not get actual protocol version\n");
-        S2N_ERROR(S2N_ERR_ACTUAL_PROTOCOL_VERSION);
+        POSIX_BAIL(S2N_ERR_ACTUAL_PROTOCOL_VERSION);
     }
     printf("CONNECTED:\n");
     printf("Client hello version: %d\n", client_hello_version);
@@ -124,6 +125,7 @@ int negotiate(struct s2n_connection *conn, int fd)
 
     printf("Curve: %s\n", s2n_connection_get_curve(conn));
     printf("KEM: %s\n", s2n_connection_get_kem_name(conn));
+    printf("KEM Group: %s\n", s2n_connection_get_kem_group_name(conn));
 
     uint32_t length;
     const uint8_t *status = s2n_connection_get_ocsp_response(conn, &length);
@@ -176,11 +178,17 @@ int echo(struct s2n_connection *conn, int sockfd)
                     exit(1);
                 }
 
-                bytes_written = write(STDOUT_FILENO, buffer, bytes_read);
-                if (bytes_written <= 0) {
-                    fprintf(stderr, "Error writing to stdout\n");
-                    exit(1);
-                }
+                char *buf_ptr = buffer;
+                do {
+                    bytes_written = write(STDOUT_FILENO, buf_ptr, bytes_read);
+                    if (bytes_written < 0) {
+                        fprintf(stderr, "Error writing to stdout\n");
+                        exit(1);
+                    }
+
+                    bytes_read -= bytes_written;
+                    buf_ptr += bytes_written;
+                } while (bytes_read > 0);
             }
 
             if (readers[1].revents & POLLIN) {
@@ -225,10 +233,11 @@ int echo(struct s2n_connection *conn, int sockfd)
                             if (wait_for_event(sockfd, blocked) != S2N_SUCCESS) {
                                 S2N_ERROR_PRESERVE_ERRNO();
                             }
+                        } else {
+                            // Only modify the counts if we successfully wrote the data
+                            bytes_read -= bytes_written;
+                            buf_ptr += bytes_written;
                         }
-
-                        bytes_read -= bytes_written;
-                        buf_ptr += bytes_written;
                     } while (bytes_read > 0);
 
                 } while (bytes_available || blocked);
@@ -245,14 +254,14 @@ int echo(struct s2n_connection *conn, int sockfd)
                         (readers[0].revents & POLLERR ) ? 1 : 0,
                         (readers[0].revents & POLLHUP ) ? 1 : 0,
                         (readers[0].revents & POLLNVAL ) ? 1 : 0);
-                S2N_ERROR(S2N_ERR_POLLING_FROM_SOCKET);
+                POSIX_BAIL(S2N_ERR_POLLING_FROM_SOCKET);
             }
 
             if (readers[1].revents & (POLLERR | POLLNVAL)) {
                 fprintf(stderr, "Error polling from socket: err=%d nval=%d\n",
                         (readers[1].revents & POLLERR ) ? 1 : 0,
                         (readers[1].revents & POLLNVAL ) ? 1 : 0);
-                S2N_ERROR(S2N_ERR_POLLING_FROM_SOCKET);
+                POSIX_BAIL(S2N_ERR_POLLING_FROM_SOCKET);
             }
         }
     } while (p < 0 && errno == EINTR);

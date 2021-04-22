@@ -13,43 +13,42 @@
  * permissions and limitations under the License.
  */
 
-#include "api/s2n.h"
-#include "utils/s2n_blob.h"
-
 #include <assert.h>
 #include <cbmc_proof/cbmc_utils.h>
-#include <cbmc_proof/proof_allocators.h>
 #include <cbmc_proof/make_common_datastructures.h>
+
+#include "api/s2n.h"
+#include "utils/s2n_blob.h"
 
 void s2n_blob_slice_harness()
 {
     /* Non-deterministic inputs. */
     struct s2n_blob *blob = cbmc_allocate_s2n_blob();
-    __CPROVER_assume(s2n_blob_is_valid(blob));
+    __CPROVER_assume(s2n_result_is_ok(s2n_blob_validate(blob)));
     struct s2n_blob *slice = cbmc_allocate_s2n_blob();
-    __CPROVER_assume(s2n_blob_is_valid(slice));
+    __CPROVER_assume(s2n_result_is_ok(s2n_blob_validate(slice)));
     uint32_t offset;
     uint32_t size;
 
     /* Save previous state. */
-    struct s2n_blob old_blob = *blob;
+    struct s2n_blob               old_blob = *blob;
     struct store_byte_from_buffer old_byte_from_blob;
     save_byte_from_blob(blob, &old_byte_from_blob);
-    struct s2n_blob old_slice = *slice;
+    struct s2n_blob               old_slice = *slice;
     struct store_byte_from_buffer old_byte_from_slice;
     save_byte_from_blob(slice, &old_byte_from_slice);
 
     /* Operation under verification. */
-    if(s2n_blob_slice(blob, slice, offset, size) == S2N_SUCCESS) {
+    if (s2n_blob_slice(blob, slice, offset, size) == S2N_SUCCESS) {
         assert(blob->size >= offset + size);
         assert(slice->size == size);
         assert(slice->growable == 0);
         assert(slice->allocated == 0);
-        assert_bytes_match(blob->data+offset, slice->data, slice->size);
+        assert_bytes_match(blob->data + offset, slice->data, slice->size);
     } else {
         assert_blob_equivalence(slice, &old_slice, &old_byte_from_slice);
     }
-    assert(s2n_blob_is_valid(slice));
-    assert(s2n_blob_is_valid(blob));
+    assert(s2n_result_is_ok(s2n_blob_validate(slice)));
+    assert(s2n_result_is_ok(s2n_blob_validate(blob)));
     assert_blob_equivalence(blob, &old_blob, &old_byte_from_blob);
 }

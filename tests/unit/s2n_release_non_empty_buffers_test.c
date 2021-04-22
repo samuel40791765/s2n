@@ -17,12 +17,12 @@
 
 #include "testlib/s2n_testlib.h"
 
-#include <sys/poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <signal.h>
 #include <stdint.h>
 #include <fcntl.h>
+#include <poll.h>
 
 #include <s2n.h>
 
@@ -87,6 +87,7 @@ int main(int argc, char **argv)
     ssize_t ret = 0;
 
     BEGIN_TEST();
+    EXPECT_SUCCESS(s2n_disable_tls13());
 
     EXPECT_NOT_NULL(config = s2n_config_new());
     EXPECT_NOT_NULL(cert_chain_pem = malloc(S2N_MAX_TEST_PEM_SIZE));
@@ -149,7 +150,7 @@ int main(int argc, char **argv)
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             continue;
         } else {
-            GUARD(ret);
+            POSIX_GUARD(ret);
         }
     }
 
@@ -167,7 +168,7 @@ int main(int argc, char **argv)
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             continue;
         } else {
-            GUARD(ret);
+            POSIX_GUARD(ret);
         }
 
         ret = s2n_recv(conn, buf, sizeof(buf), &blocked);

@@ -35,7 +35,6 @@
 #include <error/s2n_errno.h>
 
 #include "tls/s2n_connection.h"
-#include "tls/s2n_tls13.h"
 #include "utils/s2n_safety.h"
 
 #define S2N_MAX_ECC_CURVE_NAME_LENGTH 10
@@ -52,8 +51,7 @@ void usage()
     fprintf(stderr, "  -c [version_string]\n");
     fprintf(stderr, "  --ciphers [version_string]\n");
     fprintf(stderr, "    Set the cipher preference version string. Defaults to \"default\". See USAGE-GUIDE.md\n");
-    fprintf(stderr, "  -e\n");
-    fprintf(stderr, "  --echo\n");
+    fprintf(stderr, "  -e,--echo\n");
     fprintf(stderr, "    Listen to stdin after TLS Connection is established and echo it to the Server\n");
     fprintf(stderr, "  -h,--help\n");
     fprintf(stderr, "    Display this message and quit.\n");
@@ -63,7 +61,7 @@ void usage()
     fprintf(stderr, "\n");
     fprintf(stderr, "  -s,--status\n");
     fprintf(stderr, "    Request the OCSP status of the remote server certificate\n");
-    fprintf(stderr, "  --mfl\n");
+    fprintf(stderr, "  -m,--mfl\n");
     fprintf(stderr, "    Request maximum fragment length from: 512, 1024, 2048, 4096\n");
     fprintf(stderr, "  -f,--ca-file [file path]\n");
     fprintf(stderr, "    Location of trust store CA file (PEM format). If neither -f or -d are specified. System defaults will be used.\n");
@@ -71,9 +69,9 @@ void usage()
     fprintf(stderr, "    Directory containing hashed trusted certs. If neither -f or -d are specified. System defaults will be used.\n");
     fprintf(stderr, "  -i,--insecure\n");
     fprintf(stderr, "    Turns off certification validation altogether.\n");
-    fprintf(stderr, "  --cert [file path]\n");
+    fprintf(stderr, "  -l,--cert [file path]\n");
     fprintf(stderr, "    Path to a PEM encoded certificate. Optional. Will only be used for client auth\n");
-    fprintf(stderr, "  --key [file path]\n");
+    fprintf(stderr, "  -k,--key [file path]\n");
     fprintf(stderr, "    Path to a PEM encoded private key that matches cert. Will only be used for client auth\n");
     fprintf(stderr, "  -r,--reconnect\n");
     fprintf(stderr, "    Drop and re-make the connection using Session ticket. If session ticket is disabled, then re-make the connection using Session-ID \n");
@@ -85,15 +83,15 @@ void usage()
     fprintf(stderr, "    Set dynamic record timeout threshold\n");
     fprintf(stderr, "  -C,--corked-io\n");
     fprintf(stderr, "    Turn on corked io\n");
-    fprintf(stderr, "  --tls13\n");
-    fprintf(stderr, "    Turn on experimental TLS1.3 support.\n");
-    fprintf(stderr, "  --non-blocking\n");
+    fprintf(stderr, "  -B,--non-blocking\n");
     fprintf(stderr, "    Set the non-blocking flag on the connection's socket.\n");
     fprintf(stderr, "  -K ,--keyshares\n");
     fprintf(stderr, "    Colon separated list of curve names.\n"
                     "    The client will generate keyshares only for the curve names present in the ecc_preferences list configured in the security_policy.\n"
                     "    The curves currently supported by s2n are: `x25519`, `secp256r1` and `secp384r1`. Note that `none` represents a list of empty keyshares.\n"
                     "    By default, the client will generate keyshares for all curves present in the ecc_preferences list.\n");
+    fprintf(stderr, "  -L --key-log <path>\n");
+    fprintf(stderr, "    Enable NSS key logging into the provided path\n");
     fprintf(stderr, "\n");
     exit(1);
 }
@@ -110,8 +108,12 @@ static uint8_t unsafe_verify_host(const char *host_name, size_t host_name_len, v
         return (uint8_t)(strcasecmp(suffix, host_name + 1) == 0);
     }
 
-    int equals = strcasecmp(host_name, verify_data->trusted_host);
-    return (uint8_t)(equals == 0);
+    if (strcasecmp(host_name, "localhost") == 0 || strcasecmp(host_name, "127.0.0.1") == 0) {
+        return (uint8_t) (strcasecmp(verify_data->trusted_host, "localhost") == 0
+                || strcasecmp(verify_data->trusted_host, "127.0.0.1") == 0);
+    }
+
+    return (uint8_t) (strcasecmp(host_name, verify_data->trusted_host) == 0);
 }
 
 static void setup_s2n_config(struct s2n_config *config, const char *cipher_prefs, s2n_status_request_type type,
@@ -250,12 +252,13 @@ int main(int argc, char *const *argv)
     const char *port = "443";
     int echo_input = 0;
     int use_corked_io = 0;
-    int use_tls13 = 0;
     uint8_t non_blocking = 0;
     int keyshares_count = 0;
     char keyshares[S2N_ECC_EVP_SUPPORTED_CURVES_COUNT][S2N_MAX_ECC_CURVE_NAME_LENGTH];
     char *input = NULL;
     char *token = NULL;
+    const char *key_log_path = NULL;
+    FILE *key_log_file = NULL;
 
     static struct option long_options[] = {
         {"alpn", required_argument, 0, 'a'},
@@ -278,11 +281,13 @@ int main(int argc, char *const *argv)
         {"tls13", no_argument, 0, '3'},
         {"keyshares", required_argument, 0, 'K'},
         {"non-blocking", no_argument, 0, 'B'},
+        {"key-log", required_argument, 0, 'L'},
+        { 0 },
     };
 
     while (1) {
         int option_index = 0;
-        int c = getopt_long(argc, argv, "a:c:ehn:sf:d:l:k:D:t:irTCK:", long_options, &option_index);
+        int c = getopt_long(argc, argv, "a:c:ehn:m:sf:d:l:k:D:t:irTCK:BL:", long_options, &option_index);
         if (c == -1) {
             break;
         }
@@ -356,10 +361,13 @@ int main(int argc, char *const *argv)
             }
             break;
         case '3':
-            use_tls13 = 1;
+            /* Do nothing -- this argument is deprecated. */
             break;
         case 'B':
             non_blocking = 1;
+            break;
+        case 'L':
+            key_log_path = optarg;
             break;
         case '?':
         default:
@@ -393,10 +401,6 @@ int main(int argc, char *const *argv)
     if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
         fprintf(stderr, "Error disabling SIGPIPE\n");
         exit(1);
-    }
-
-    if (use_tls13) {
-        GUARD_EXIT(s2n_enable_tls13(), "Error enabling TLS1.3");
     }
 
     GUARD_EXIT(s2n_init(), "Error running s2n_init()");
@@ -462,6 +466,19 @@ int main(int argc, char *const *argv)
             GUARD_EXIT(s2n_config_set_session_tickets_onoff(config, 1), "Error enabling session tickets");
         }
 
+        if (key_log_path) {
+            key_log_file = fopen(key_log_path, "a");
+            GUARD_EXIT(key_log_file == NULL ? S2N_FAILURE : S2N_SUCCESS, "Failed to open key log file");
+            GUARD_EXIT(
+                s2n_config_set_key_log_cb(
+                    config,
+                    key_log_callback,
+                    (void *)key_log_file
+                ),
+                "Failed to set key log callback"
+            );
+        }
+
         struct s2n_connection *conn = s2n_connection_new(S2N_CLIENT);
 
         if (conn == NULL) {
@@ -525,8 +542,16 @@ int main(int argc, char *const *argv)
             echo(conn, sockfd);
         }
 
+        /* The following call can block on receiving a close_notify if we initiate the shutdown or if the */
+        /* peer fails to send a close_notify. */
+        /* TODO: However, we should expect to receive a close_notify from the peer and shutdown gracefully. */
+        /* Please see tracking issue for more detail: https://github.com/aws/s2n-tls/issues/2692 */
         s2n_blocked_status blocked;
-        s2n_shutdown(conn, &blocked);
+        int shutdown_rc = s2n_shutdown(conn, &blocked);
+        if (shutdown_rc == -1 && blocked != S2N_BLOCKED_ON_READ) {
+            fprintf(stderr, "Unexpected error during shutdown: '%s'\n", s2n_strerror(s2n_errno, "NULL"));
+            exit(1);
+        }
 
         GUARD_EXIT(s2n_connection_free(conn), "Error freeing connection");
 
@@ -536,6 +561,10 @@ int main(int argc, char *const *argv)
         reconnect--;
 
     } while (reconnect >= 0);
+
+    if (key_log_file) {
+        fclose(key_log_file);
+    }
 
     GUARD_EXIT(s2n_cleanup(), "Error running s2n_cleanup()");
 

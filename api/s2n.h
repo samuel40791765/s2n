@@ -51,6 +51,15 @@ extern "C" {
 S2N_API
 extern __thread int s2n_errno;
 
+/**
+ * Returns the address of the thread-local `s2n_errno` variable
+ *
+ * This function can be used instead of trying to resolve `s2n_errno` directly
+ * in runtimes where thread-local variables may not be easily accessible.
+ */
+S2N_API
+extern int *s2n_errno_location(void);
+
 typedef enum {
     S2N_ERR_T_OK=0,
     S2N_ERR_T_IO,
@@ -130,6 +139,15 @@ S2N_API
 extern int s2n_mem_set_callbacks(s2n_mem_init_callback mem_init_callback, s2n_mem_cleanup_callback mem_cleanup_callback,
                                  s2n_mem_malloc_callback mem_malloc_callback, s2n_mem_free_callback mem_free_callback);
 
+typedef int (*s2n_rand_init_callback)(void);
+typedef int (*s2n_rand_cleanup_callback)(void);
+typedef int (*s2n_rand_seed_callback)(void *data, uint32_t size);
+typedef int (*s2n_rand_mix_callback)(void *data, uint32_t size);
+
+S2N_API
+extern int s2n_rand_set_callbacks(s2n_rand_init_callback rand_init_callback, s2n_rand_cleanup_callback rand_cleanup_callback,
+        s2n_rand_seed_callback rand_seed_callback, s2n_rand_mix_callback rand_mix_callback);
+
 typedef enum {
     S2N_EXTENSION_SERVER_NAME = 0,
     S2N_EXTENSION_MAX_FRAG_LEN = 1,
@@ -149,6 +167,7 @@ typedef enum {
     S2N_TLS_MAX_FRAG_LEN_4096 = 4,
 } s2n_max_frag_len;
 
+struct s2n_cert;
 struct s2n_cert_chain_and_key;
 struct s2n_pkey;
 typedef struct s2n_pkey s2n_cert_public_key;
@@ -201,6 +220,19 @@ S2N_API
 extern int s2n_config_add_dhparams(struct s2n_config *config, const char *dhparams_pem);
 S2N_API
 extern int s2n_config_set_cipher_preferences(struct s2n_config *config, const char *version);
+
+/**
+ * Appends the provided application protocol to the preference list
+ *
+ * The data provided in `protocol` parameter will be copied into an internal buffer
+ *
+ * @param config The configuration object being updated
+ * @param protocol A pointer to a byte array value
+ * @param protocol_len The length of bytes that should be read from `protocol`. Note: this value cannot be 0, otherwise an error will be returned.
+ */
+S2N_API
+extern int s2n_config_append_protocol_preference(struct s2n_config *config, const uint8_t *protocol, uint8_t protocol_len);
+
 S2N_API
 extern int s2n_config_set_protocol_preferences(struct s2n_config *config, const char * const *protocols, int protocol_count);
 typedef enum { S2N_STATUS_REQUEST_NONE = 0, S2N_STATUS_REQUEST_OCSP = 1 } s2n_status_request_type;
@@ -248,8 +280,15 @@ S2N_API
 extern void *s2n_connection_get_ctx(struct s2n_connection *conn);
 
 typedef int s2n_client_hello_fn(struct s2n_connection *conn, void *ctx);
+typedef enum { S2N_CLIENT_HELLO_CB_BLOCKING, S2N_CLIENT_HELLO_CB_NONBLOCKING } s2n_client_hello_cb_mode;
 S2N_API
 extern int s2n_config_set_client_hello_cb(struct s2n_config *config, s2n_client_hello_fn client_hello_callback, void *ctx);
+S2N_API
+extern int s2n_config_set_client_hello_cb_mode(struct s2n_config *config, s2n_client_hello_cb_mode cb_mode);
+S2N_API
+extern int s2n_client_hello_cb_done(struct s2n_connection *conn);
+S2N_API
+extern int s2n_connection_server_name_extension_used(struct s2n_connection *conn);
 
 struct s2n_client_hello;
 S2N_API
@@ -310,6 +349,19 @@ extern uint64_t s2n_connection_get_delay(struct s2n_connection *conn);
 
 S2N_API
 extern int s2n_connection_set_cipher_preferences(struct s2n_connection *conn, const char *version);
+
+/**
+ * Appends the provided application protocol to the preference list
+ *
+ * The data provided in `protocol` parameter will be copied into an internal buffer
+ *
+ * @param conn The connection object being updated
+ * @param protocol A pointer to a slice of bytes
+ * @param protocol_len The length of bytes that should be read from `protocol`. Note: this value cannot be 0, otherwise an error will be returned.
+ */
+S2N_API
+extern int s2n_connection_append_protocol_preference(struct s2n_connection *conn, const uint8_t *protocol, uint8_t protocol_len);
+
 S2N_API
 extern int s2n_connection_set_protocol_preferences(struct s2n_connection *conn, const char * const *protocols, int protocol_count);
 S2N_API
@@ -323,7 +375,13 @@ extern const uint8_t *s2n_connection_get_ocsp_response(struct s2n_connection *co
 S2N_API
 extern const uint8_t *s2n_connection_get_sct_list(struct s2n_connection *conn, uint32_t *length);
 
-typedef enum { S2N_NOT_BLOCKED = 0, S2N_BLOCKED_ON_READ, S2N_BLOCKED_ON_WRITE, S2N_BLOCKED_ON_APPLICATION_INPUT } s2n_blocked_status;
+typedef enum {
+    S2N_NOT_BLOCKED = 0,
+    S2N_BLOCKED_ON_READ,
+    S2N_BLOCKED_ON_WRITE,
+    S2N_BLOCKED_ON_APPLICATION_INPUT,
+    S2N_BLOCKED_ON_EARLY_DATA,
+} s2n_blocked_status;
 S2N_API
 extern int s2n_negotiate(struct s2n_connection *conn, s2n_blocked_status *blocked);
 S2N_API
@@ -381,6 +439,117 @@ extern int s2n_connection_is_ocsp_stapled(struct s2n_connection *conn);
 S2N_API
 extern struct s2n_cert_chain_and_key *s2n_connection_get_selected_cert(struct s2n_connection *conn);
 
+/**
+ * Returns the length of the s2n certificate chain `chain_and_key`.
+ * 
+ * @param chain_and_key A pointer to the s2n_cert_chain_and_key object being read.
+ * @param cert_length This return value represents the length of the s2n certificate chain `chain_and_key`.
+ */
+S2N_API
+extern int s2n_cert_chain_get_length(const struct s2n_cert_chain_and_key *chain_and_key, uint32_t *cert_length);
+
+/**
+ * Returns the certificate `out_cert` present at the index `cert_idx` of the certificate chain `chain_and_key`.
+ * 
+ * Note that the index of the leaf certificate is zero. If the certificate chain `chain_and_key` is NULL or the
+ * certificate index value is not in the acceptable range for the input certificate chain, an error is returned.
+ * 
+ * @param chain_and_key A pointer to the s2n_cert_chain_and_key object being read.
+ * @param cert_idx The certificate index for the requested certificate within the s2n certificate chain.
+ * @param cert_length This return value represents the length of the s2n certificate chain `chain_and_key`.
+ */
+S2N_API
+extern int s2n_cert_chain_get_cert(const struct s2n_cert_chain_and_key *chain_and_key, struct s2n_cert **out_cert, const uint32_t cert_idx);
+
+/**
+ * Returns the s2n certificate in DER format along with its length.
+ * 
+ * The API gets the s2n certificate `cert` in DER format. The certificate is returned in the `out_cert_der` buffer.
+ * Here, `cert_len` represents the length of the certificate.
+ * 
+ * A caller can use certificate parsing tools such as the ones provided by OpenSSL to parse the DER encoded certificate chain returned.
+ *
+ * # Safety
+ * 
+ * The memory for the `out_cert_der` buffer is allocated and owned by s2n-tls. 
+ * Since the size of the certificate can potentially be very large, a pointer to internal connection data is returned instead of 
+ * copying the contents into a caller-provided buffer.
+ * 
+ * The pointer to the output buffer `out_cert_der` is valid only while the connection exists.
+ * The `s2n_connection_free` API frees the memory assosciated with the out_cert_der buffer and after the `s2n_connection_wipe` API is
+ * called the memory pointed by out_cert_der is invalid.
+ * 
+ * If a caller wishes to persist the `out_cert_der` beyond the lifetime of the connection, the contents would need to be
+ * copied prior to the connection termination.
+ * 
+ * @param cert A pointer to the s2n_cert object being read.
+ * @param out_cert_der A pointer to the output buffer which will hold the s2n certificate `cert` in DER format.
+ * @param cert_length This return value represents the length of the certificate.
+ */
+S2N_API
+extern int s2n_cert_get_der(const struct s2n_cert *cert, const uint8_t **out_cert_der, uint32_t *cert_length);
+
+/**
+ * Returns the validated peer certificate chain as a `s2n_cert_chain_and_key` opaque object.
+ * 
+ * The `s2n_cert_chain_and_key` parameter must be allocated by the caller using the `s2n_cert_chain_and_key_new` API
+ * prior to this function call and must be empty. To free the memory associated with the `s2n_cert_chain_and_key` object use the 
+ * `s2n_cert_chain_and_key_free` API.
+ * 
+ * @param conn A pointer to the s2n_connection object being read.
+ * @param s2n_cert_chain_and_key The returned validated peer certificate chain `cert_chain` retrieved from the s2n connection.
+ */
+S2N_API
+extern int s2n_connection_get_peer_cert_chain(const struct s2n_connection *conn, struct s2n_cert_chain_and_key *cert_chain);
+
+/**
+ * Returns the length of the DER encoded extension value of the ASN.1 X.509 certificate extension.
+ * 
+ * @param cert A pointer to the s2n_cert object being read.
+ * @param oid A null-terminated cstring that contains the OID of the X.509 certificate extension to be read.
+ * @param ext_value_len This return value contains the length of DER encoded extension value of the ASN.1 X.509 certificate extension.
+ */
+S2N_API 
+extern int s2n_cert_get_x509_extension_value_length(struct s2n_cert *cert, const uint8_t *oid, uint32_t *ext_value_len);
+
+/**
+ * Returns the DER encoding of an ASN.1 X.509 certificate extension value, it's length and a boolean critical.
+ * 
+ * @param cert A pointer to the s2n_cert object being read.
+ * @param oid A null-terminated cstring that contains the OID of the X.509 certificate extension to be read.
+ * @param ext_value A pointer to the output buffer which will hold the DER encoding of an ASN.1 X.509 certificate extension value returned. 
+ * @param ext_value_len  This value is both an input and output parameter and represents the length of the output buffer `ext_value`. 
+ * When used as an input parameter, the caller must use this parameter to convey the maximum length of `ext_value`. 
+ * When used as an output parameter, `ext_value_len` holds the actual length of the DER encoding of the ASN.1 X.509 certificate extension value returned. 
+ * @param critical This return value contains the boolean value for `critical`.
+ */
+S2N_API 
+extern int s2n_cert_get_x509_extension_value(struct s2n_cert *cert, const uint8_t *oid, uint8_t *ext_value, uint32_t *ext_value_len, bool *critical);
+
+/**
+ * Returns the UTF8 String length of the ASN.1 X.509 certificate extension data. 
+ * 
+ * @param extension_data A pointer to the DER encoded ASN.1 X.509 certificate extension value being read.
+ * @param extension_len represents the length of the input buffer `extension_data`.
+ * @param utf8_str_len This return value contains the UTF8 String length of the ASN.1 X.509 certificate extension data.
+ */
+S2N_API 
+extern int s2n_cert_get_utf8_string_from_extension_data_length(const uint8_t *extension_data, uint32_t extension_len, uint32_t *utf8_str_len);
+
+/**
+ * Returns the UTF8 String representation of the DER encoded ASN.1 X.509 certificate extension data.
+ * 
+ * @param extension_data A pointer to the DER encoded ASN.1 X.509 certificate extension value being read.
+ * @param extension_len represents the length of the input buffer `extension_data`.
+ * @param out_data A pointer to the output buffer which will hold the UTF8 String representation of the DER encoded ASN.1 X.509 
+ * certificate extension data returned. 
+ * @param out_len This value is both an input and output parameter and represents the length of the output buffer `out_data`.
+ * When used as an input parameter, the caller must use this parameter to convey the maximum length of `out_data`. 
+ * When used as an output parameter, `out_len` holds the actual length of UTF8 String returned.
+ */
+S2N_API 
+extern int s2n_cert_get_utf8_string_from_extension_data(const uint8_t *extension_data, uint32_t extension_len, uint8_t *out_data, uint32_t *out_len);
+
 S2N_API
 extern uint64_t s2n_connection_get_wire_bytes_in(struct s2n_connection *conn);
 S2N_API
@@ -397,12 +566,33 @@ S2N_API
 extern int s2n_connection_client_cert_used(struct s2n_connection *conn);
 S2N_API
 extern const char *s2n_connection_get_cipher(struct s2n_connection *conn);
+
+/**
+ * Returns the IANA value for the connection's negotiated cipher suite.
+ *
+ * The value is returned in the form of `first,second`, in order to closely match
+ * the values defined in the [IANA Registry](https://www.iana.org/assignments/tls-parameters/tls-parameters.xhtml#table-tls-parameters-4).
+ * For example if the connection's negotiated cipher suite is `TLS_AES_128_GCM_SHA256`,
+ * which is registered as `0x13,0x01`, then `first = 0x13` and `second = 0x01`.
+ *
+ * This method will only succeed after the cipher suite has been negotiated with the peer.
+ *
+ * @param conn A pointer to the connection being read
+ * @param first A pointer to a single byte, which will be updated with the first byte in the registered IANA value.
+ * @param second A pointer to a single byte, which will be updated with the second byte in the registered IANA value.
+ * @return A POSIX error signal. If an error was returned, the values contained in `first` and `second` should be considered invalid.
+ */
+S2N_API
+extern int s2n_connection_get_cipher_iana_value(struct s2n_connection *conn, uint8_t *first, uint8_t *second);
+
 S2N_API
 extern int s2n_connection_is_valid_for_cipher_preferences(struct s2n_connection *conn, const char *version);
 S2N_API
 extern const char *s2n_connection_get_curve(struct s2n_connection *conn);
 S2N_API
 extern const char *s2n_connection_get_kem_name(struct s2n_connection *conn);
+S2N_API
+extern const char *s2n_connection_get_kem_group_name(struct s2n_connection *conn);
 S2N_API
 extern int s2n_connection_get_alert(struct s2n_connection *conn);
 S2N_API
@@ -421,6 +611,54 @@ S2N_API
 extern int s2n_async_pkey_op_apply(struct s2n_async_pkey_op *op, struct s2n_connection *conn);
 S2N_API
 extern int s2n_async_pkey_op_free(struct s2n_async_pkey_op *op);
+
+/**
+ * Callback function for handling key log events
+ *
+ * THIS SHOULD BE USED FOR DEBUGGING PURPOSES ONLY!
+ *
+ * Each log line is formatted with the
+ * [NSS Key Log Format](https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format)
+ * without a newline.
+ *
+ * # Safety
+ *
+ * * `ctx` MUST be cast into the same type of pointer that was originally created
+ * * `logline` bytes MUST be copied or discarded before this function returns
+ *
+ * @param ctx Context for the callback
+ * @param conn Connection for which the log line is being emitted
+ * @param logline Pointer to the log line data
+ * @param len Length of the log line data
+ */
+typedef int (*s2n_key_log_fn)(void *ctx, struct s2n_connection *conn, uint8_t *logline, size_t len);
+
+/**
+ * Sets a key logging callback on the provided config
+ *
+ * THIS SHOULD BE USED FOR DEBUGGING PURPOSES ONLY!
+ *
+ * Setting this function enables configurations to emit secrets in the
+ * [NSS Key Log Format](https://developer.mozilla.org/en-US/docs/Mozilla/Projects/NSS/Key_Log_Format)
+ *
+ * # Safety
+ *
+ * * `callback` MUST cast `ctx` into the same type of pointer that was originally created
+ * * `ctx` MUST live for at least as long as it is set on the config
+ *
+ * @param config Config to set the callback
+ * @param callback The function that should be called for each secret log entry
+ * @param ctx The context to be passed when the callback is called
+ */
+S2N_API
+extern int s2n_config_set_key_log_cb(struct s2n_config *config, s2n_key_log_fn callback, void *ctx);
+
+/* s2n_config_enable_cert_req_dss_legacy_compat adds a dss cert type in the server certificate request when being called.
+ * It only sends the dss cert type in the cert request but does not succeed the handshake if a dss cert is received.
+ * Please DO NOT call this api unless you know you actually need legacy DSS certificate type compatibility
+ */
+S2N_API
+extern int s2n_config_enable_cert_req_dss_legacy_compat(struct s2n_config *config);
 
 #ifdef __cplusplus
 }

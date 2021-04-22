@@ -59,7 +59,11 @@ int s2n_set_connection_hello_retry_flags(struct s2n_connection *conn);
 int s2n_connection_allow_all_response_extensions(struct s2n_connection *conn);
 int s2n_connection_set_all_protocol_versions(struct s2n_connection *conn, uint8_t version);
 
-int s2n_unsafe_set_drbg_seed(const struct s2n_blob *seed);
+struct s2n_psk* s2n_test_psk_new(struct s2n_connection *conn);
+S2N_RESULT s2n_append_test_psk_with_early_data(struct s2n_connection *conn, uint32_t max_early_data,
+        const struct s2n_cipher_suite *cipher_suite);
+S2N_RESULT s2n_append_test_chosen_psk_with_early_data(struct s2n_connection *conn, uint32_t max_early_data,
+        const struct s2n_cipher_suite *cipher_suite);
 
 #define S2N_MAX_TEST_PEM_SIZE 4096
 
@@ -113,17 +117,28 @@ int s2n_unsafe_set_drbg_seed(const struct s2n_blob *seed);
 
 /* OCSP Stapled Response Testing files */
 #define S2N_OCSP_SERVER_CERT                   "../pems/ocsp/server_cert.pem"
+#define S2N_OCSP_SERVER_ECDSA_CERT             "../pems/ocsp/server_ecdsa_cert.pem"
+
 #define S2N_OCSP_SERVER_KEY                    "../pems/ocsp/server_key.pem"
 #define S2N_OCSP_CA_CERT                       "../pems/ocsp/ca_cert.pem"
 #define S2N_OCSP_CA_KEY                        "../pems/ocsp/ca_key.pem"
 #define S2N_OCSP_RESPONSE_DER                  "../pems/ocsp/ocsp_response.der"
 #define S2N_OCSP_RESPONSE_NO_NEXT_UPDATE_DER   "../pems/ocsp/ocsp_response_no_next_update.der"
+#define S2N_OCSP_RESPONSE_REVOKED_DER          "../pems/ocsp/ocsp_response_revoked.der"
+#define S2N_OCSP_RESPONSE_WRONG_SIGNER_DER     "../pems/ocsp/ocsp_response_wrong_signer.der"
 #define S2N_OCSP_RESPONSE_CERT                 "../pems/ocsp/ocsp_cert.pem"
 
 #define S2N_ALLIGATOR_SAN_CERT                 "../pems/sni/alligator_cert.pem"
 #define S2N_ALLIGATOR_SAN_KEY                  "../pems/sni/alligator_key.pem"
 
 #define S2N_DHPARAMS_2048 "../pems/dhparams_2048.pem"
+
+#define S2N_ONE_TRAILING_BYTE_CERT_BIN         "../pems/one_trailing_byte_cert.bin"
+#define S2N_FOUR_TRAILING_BYTE_CERT_BIN        "../pems/four_trailing_byte_cert.bin"
+
+/* This is a certificate with a legacy SHA-1 signature on the root certificate. This is used to prove
+ * that our certificate validation code does not fail a root certificate signed with SHA-1. */
+#define S2N_SHA1_ROOT_SIGNATURE_CA_CERT        "../pems/rsa_1024_sha1_CA_cert.pem"
 
 #define S2N_DEFAULT_TEST_CERT_CHAIN  S2N_RSA_2048_PKCS1_CERT_CHAIN
 #define S2N_DEFAULT_TEST_PRIVATE_KEY S2N_RSA_2048_PKCS1_KEY
@@ -139,12 +154,16 @@ int s2n_test_cert_chain_and_key_new(struct s2n_cert_chain_and_key **chain_and_ke
         const char *cert_chain_file, const char *private_key_file);
 
 int s2n_negotiate_test_server_and_client(struct s2n_connection *server_conn, struct s2n_connection *client_conn);
+S2N_RESULT s2n_negotiate_test_server_and_client_until_message(struct s2n_connection *server_conn,
+        struct s2n_connection *client_conn, message_type_t message_type);
 int s2n_shutdown_test_server_and_client(struct s2n_connection *server_conn, struct s2n_connection *client_conn);
 
 int s2n_test_kem_with_kat(const struct s2n_kem *kem, const char *kat_file);
 int s2n_test_hybrid_ecdhe_kem_with_kat(const struct s2n_kem *kem, struct s2n_cipher_suite *cipher_suite,
         const char *cipher_pref_version, const char * kat_file_name, uint32_t server_key_message_length,
         uint32_t client_key_message_length);
+S2N_RESULT s2n_pq_noop_asm();
+bool s2n_pq_no_asm_available();
 
 /* Expects 2 s2n_blobs to be equal (same size and contents) */
 #define S2N_BLOB_EXPECT_EQUAL( blob1, blob2 ) do {              \
@@ -170,3 +189,7 @@ int s2n_public_ecc_keys_are_equal(struct s2n_ecc_evp_params *params_1, struct s2
 extern const s2n_parsed_extension EMPTY_PARSED_EXTENSIONS[S2N_PARSED_EXTENSIONS_COUNT];
 #define EXPECT_PARSED_EXTENSION_LIST_EMPTY(list) EXPECT_BYTEARRAY_EQUAL(list.parsed_extensions, EMPTY_PARSED_EXTENSIONS, sizeof(EMPTY_PARSED_EXTENSIONS))
 #define EXPECT_PARSED_EXTENSION_LIST_NOT_EMPTY(list) EXPECT_BYTEARRAY_NOT_EQUAL(list.parsed_extensions, EMPTY_PARSED_EXTENSIONS, sizeof(EMPTY_PARSED_EXTENSIONS))
+
+int s2n_kem_recv_public_key_fuzz_test(const uint8_t *buf, size_t len, struct s2n_kem_params *kem_params);
+int s2n_kem_recv_ciphertext_fuzz_test(const uint8_t *buf, size_t len, struct s2n_kem_params *kem_params);
+int s2n_kem_recv_ciphertext_fuzz_test_init(const char *kat_file_path, struct s2n_kem_params *kem_params);

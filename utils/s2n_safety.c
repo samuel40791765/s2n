@@ -22,8 +22,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include "s2n_annotations.h"
-#include "s2n_safety.h"
+#include "utils/s2n_annotations.h"
+#include "utils/s2n_safety.h"
 
 /**
  * Get the process id
@@ -60,14 +60,18 @@ bool s2n_constant_time_equals(const uint8_t * a, const uint8_t * b, const uint32
     S2N_PUBLIC_INPUT(a);
     S2N_PUBLIC_INPUT(b);
     S2N_PUBLIC_INPUT(len);
+    POSIX_ENSURE((a == NULL) || S2N_MEM_IS_READABLE(a, len), S2N_ERR_SAFETY);
+    POSIX_ENSURE((b == NULL) || S2N_MEM_IS_READABLE(b, len), S2N_ERR_SAFETY);
 
-    PRECONDITION_POSIX(len == 0 || (a != NULL && b != NULL));
+    if (len != 0 && (a == NULL || b == NULL)) {
+        return false;
+    }
 
     uint8_t xor = 0;
-    for (int i = 0; i < len; i++) {
+    for (uint32_t i = 0; i < len; i++) {
         /* Invariants must hold for each execution of the loop
 	 * and at loop exit, hence the <= */
-        S2N_INVARIENT(i <= len);
+        S2N_INVARIANT(i <= len);
         xor |= a[i] ^ b[i];
     }
 
@@ -191,8 +195,8 @@ int s2n_in_unit_test_set(bool newval)
 
 int s2n_align_to(uint32_t initial, uint32_t alignment, uint32_t* out)
 {
-    notnull_check(out);
-    PRECONDITION_POSIX(alignment != 0);
+    POSIX_ENSURE_REF(out);
+    POSIX_ENSURE(alignment != 0, S2N_ERR_SAFETY);
     if (initial == 0) {
         *out = 0;
         return S2N_SUCCESS;
@@ -200,33 +204,33 @@ int s2n_align_to(uint32_t initial, uint32_t alignment, uint32_t* out)
     const uint64_t i = initial;
     const uint64_t a = alignment;
     const uint64_t result = a * (((i - 1) / a) + 1);
-    S2N_ERROR_IF(result > UINT32_MAX, S2N_ERR_INTEGER_OVERFLOW);
+    POSIX_ENSURE(result <= UINT32_MAX, S2N_ERR_INTEGER_OVERFLOW);
     *out = (uint32_t) result;
     return S2N_SUCCESS;
 }
 
 int s2n_mul_overflow(uint32_t a, uint32_t b, uint32_t* out)
 {
-    notnull_check(out);
+    POSIX_ENSURE_REF(out);
     const uint64_t result = ((uint64_t) a) * ((uint64_t) b);
-    S2N_ERROR_IF(result > UINT32_MAX, S2N_ERR_INTEGER_OVERFLOW);
+    POSIX_ENSURE(result <= UINT32_MAX, S2N_ERR_INTEGER_OVERFLOW);
     *out = (uint32_t) result;
     return S2N_SUCCESS;
 }
 
 int s2n_add_overflow(uint32_t a, uint32_t b, uint32_t* out)
 {
-    notnull_check(out);
+    POSIX_ENSURE_REF(out);
     uint64_t result = ((uint64_t) a) + ((uint64_t) b);
-    S2N_ERROR_IF(result > UINT32_MAX, S2N_ERR_INTEGER_OVERFLOW);
+    POSIX_ENSURE(result <= UINT32_MAX, S2N_ERR_INTEGER_OVERFLOW);
     *out = (uint32_t) result;
     return S2N_SUCCESS;
 }
 
 int s2n_sub_overflow(uint32_t a, uint32_t b, uint32_t* out)
 {
-    notnull_check(out);
-    S2N_ERROR_IF(a < b, S2N_ERR_INTEGER_OVERFLOW);
+    POSIX_ENSURE_REF(out);
+    POSIX_ENSURE(a >= b, S2N_ERR_INTEGER_OVERFLOW);
     *out = a - b;
     return S2N_SUCCESS;
 }

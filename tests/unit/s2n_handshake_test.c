@@ -120,7 +120,7 @@ static int try_handshake(struct s2n_connection *server_conn, struct s2n_connecti
         EXPECT_NOT_EQUAL(++tries, 5);
     } while (client_blocked || server_blocked);
 
-    GUARD(s2n_shutdown_test_server_and_client(server_conn, client_conn));
+    POSIX_GUARD(s2n_shutdown_test_server_and_client(server_conn, client_conn));
     return S2N_SUCCESS;
 }
 
@@ -185,18 +185,18 @@ int test_cipher_preferences(struct s2n_config *server_config, struct s2n_config 
         async_pkey_op_performed = 0;
 
         if (!expect_failure) {
-            GUARD(try_handshake(server_conn, client_conn));
+            POSIX_GUARD(try_handshake(server_conn, client_conn));
 
             EXPECT_STRING_EQUAL(s2n_connection_get_cipher(server_conn), expected_cipher->name);
 
             EXPECT_EQUAL(server_conn->handshake_params.our_chain_and_key, expected_cert_chain);
             EXPECT_EQUAL(server_conn->secure.conn_sig_scheme.sig_alg, expected_sig_alg);
 
-            EXPECT_TRUE(IS_NEGOTIATED(server_conn->handshake.handshake_type));
-            EXPECT_TRUE(IS_NEGOTIATED(client_conn->handshake.handshake_type));
+            EXPECT_TRUE(IS_NEGOTIATED(server_conn));
+            EXPECT_TRUE(IS_NEGOTIATED(client_conn));
 
-            EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn->handshake.handshake_type));
-            EXPECT_TRUE(IS_FULL_HANDSHAKE(client_conn->handshake.handshake_type));
+            EXPECT_TRUE(IS_FULL_HANDSHAKE(server_conn));
+            EXPECT_TRUE(IS_FULL_HANDSHAKE(client_conn));
 
             EXPECT_STRING_EQUAL(s2n_connection_get_last_message_name(server_conn), "APPLICATION_DATA");
             EXPECT_STRING_EQUAL(s2n_connection_get_last_message_name(client_conn), "APPLICATION_DATA");
@@ -209,7 +209,7 @@ int test_cipher_preferences(struct s2n_config *server_config, struct s2n_config 
                 EXPECT_EQUAL(async_pkey_op_performed, 0);
             }
         } else {
-            eq_check(try_handshake(server_conn, client_conn), -1);
+            POSIX_ENSURE_EQ(try_handshake(server_conn, client_conn), -1);
             EXPECT_STRING_NOT_EQUAL(s2n_connection_get_last_message_name(server_conn), "APPLICATION_DATA");
             EXPECT_STRING_NOT_EQUAL(s2n_connection_get_last_message_name(client_conn), "APPLICATION_DATA");
             EXPECT_EQUAL(async_pkey_op_called, 0);
@@ -236,6 +236,7 @@ int async_pkey_fn(struct s2n_connection *conn, struct s2n_async_pkey_op *op)
 int main(int argc, char **argv)
 {
     BEGIN_TEST();
+    EXPECT_SUCCESS(s2n_disable_tls13());
 
     char dhparams_pem[S2N_MAX_TEST_PEM_SIZE];
     EXPECT_SUCCESS(s2n_read_test_pem(S2N_DEFAULT_TEST_DHPARAMS, dhparams_pem, S2N_MAX_TEST_PEM_SIZE));

@@ -16,11 +16,16 @@
 set -ex
 
 # Upload Code Coverage Information to CodeCov.io
-if [[ -n "$CODECOV_IO_UPLOAD" ]]; then
-    if [[ -n "$FUZZ_COVERAGE" ]]; then
-        bash <(curl -s https://codecov.io/bash) -f coverage/fuzz/codecov.txt -F ${TESTS};
+if [[ "$CODECOV_IO_UPLOAD" == "true" ]]; then
+    # Evaluate more coverage options and re-renable
+    # https://github.com/aws/s2n-tls/issues/2349
+    echo "Skipping coverage upload"
+    if [[ "$FUZZ_COVERAGE" == "true" ]]; then
+        echo "Skipping fuzz upload"
+        # bash <(curl -s https://codecov.io/bash) -f coverage/fuzz/codecov.txt -F ${TESTS};
     else
-        bash <(curl -s https://codecov.io/bash) -F ${TESTS};
+        echo "Skipping test upload"
+        # bash <(curl -s https://codecov.io/bash) -F ${TESTS};
     fi
 fi
 

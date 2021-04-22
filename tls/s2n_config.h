@@ -22,6 +22,7 @@
 #include "tls/s2n_x509_validator.h"
 #include "utils/s2n_blob.h"
 #include "utils/s2n_set.h"
+#include "tls/s2n_psk.h"
 
 #define S2N_MAX_TICKET_KEYS 48
 #define S2N_MAX_TICKET_KEY_HASHES 500 /* 10KB */
@@ -38,6 +39,12 @@ struct s2n_config {
     unsigned check_ocsp:1;
     unsigned disable_x509_validation:1;
     unsigned max_verify_cert_chain_depth_set:1;
+    /* Whether a connection can be used by a QUIC implementation.
+     * See s2n_quic_support.h */
+    unsigned quic_enabled:1;
+    /* Whether to add dss cert type during a server certificate request.
+     * See https://github.com/awslabs/s2n/blob/main/docs/USAGE-GUIDE.md */
+    unsigned cert_req_dss_legacy_compat_enabled:1;
 
     struct s2n_dh_params *dhparams;
     /* Needed until we can deprecate s2n_config_add_cert_chain_and_key. This is
@@ -56,6 +63,8 @@ struct s2n_config {
     void *monotonic_clock_ctx;
 
     s2n_client_hello_fn *client_hello_cb;
+    s2n_client_hello_cb_mode client_hello_cb_mode;
+
     void *client_hello_cb_ctx;
 
     uint64_t session_state_lifetime_in_nanos;
@@ -91,10 +100,27 @@ struct s2n_config {
 
     uint8_t mfl_code;
 
+    uint8_t initial_tickets_to_send;
+
     struct s2n_x509_trust_store trust_store;
     uint16_t max_verify_cert_chain_depth;
 
     s2n_async_pkey_fn async_pkey_cb;
+
+    s2n_psk_selection_callback psk_selection_cb;
+    void *psk_selection_ctx;
+
+    s2n_key_log_fn key_log_cb;
+    void *key_log_ctx;
+
+    s2n_session_ticket_fn session_ticket_cb;
+    void *session_ticket_ctx;
+
+    s2n_early_data_cb early_data_cb;
+
+    uint32_t server_max_early_data_size;
+
+    s2n_psk_mode psk_mode;
 };
 
 int s2n_config_defaults_init(void);

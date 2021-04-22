@@ -50,20 +50,20 @@ static int s2n_test_init_encryption(struct s2n_connection *conn)
     uint8_t *client_implicit_iv = conn->client->client_implicit_iv;
  
     /* Initialize record algorithm */
-    GUARD(cipher_suite->record_alg->cipher->init(server_session_key));
-    GUARD(cipher_suite->record_alg->cipher->init(client_session_key));
-    GUARD(cipher_suite->record_alg->cipher->set_encryption_key(server_session_key, &key));
-    GUARD(cipher_suite->record_alg->cipher->set_encryption_key(client_session_key, &key));
-    GUARD(cipher_suite->record_alg->cipher->set_decryption_key(server_session_key, &key));
-    GUARD(cipher_suite->record_alg->cipher->set_decryption_key(client_session_key, &key));
+    POSIX_GUARD(cipher_suite->record_alg->cipher->init(server_session_key));
+    POSIX_GUARD(cipher_suite->record_alg->cipher->init(client_session_key));
+    POSIX_GUARD(cipher_suite->record_alg->cipher->set_encryption_key(server_session_key, &key));
+    POSIX_GUARD(cipher_suite->record_alg->cipher->set_encryption_key(client_session_key, &key));
+    POSIX_GUARD(cipher_suite->record_alg->cipher->set_decryption_key(server_session_key, &key));
+    POSIX_GUARD(cipher_suite->record_alg->cipher->set_decryption_key(client_session_key, &key));
 
     /* Initialized secrets */
-    memcpy_check(conn->secure.server_app_secret, application_secret.data, application_secret.size);
-    memcpy_check(conn->secure.client_app_secret, application_secret.data, application_secret.size);
+    POSIX_CHECKED_MEMCPY(conn->secure.server_app_secret, application_secret.data, application_secret.size);
+    POSIX_CHECKED_MEMCPY(conn->secure.client_app_secret, application_secret.data, application_secret.size);
  
     /* Copy iv bytes from input data */
-    memcpy_check(server_implicit_iv, iv.data, iv.size);
-    memcpy_check(client_implicit_iv, iv.data, iv.size);
+    POSIX_CHECKED_MEMCPY(server_implicit_iv, iv.data, iv.size);
+    POSIX_CHECKED_MEMCPY(client_implicit_iv, iv.data, iv.size);
  
     return S2N_SUCCESS;
 }
@@ -169,10 +169,10 @@ int main(int argc, char **argv)
 
         /* Force Client to send a TLS 1.3 KeyUpdate Message over TLS 1.2 connection */
         client_conn->key_update_pending = 1;
-        EXPECT_SUCCESS(s2n_key_update_send(client_conn));
+        s2n_blocked_status blocked = 0;
+        EXPECT_SUCCESS(s2n_key_update_send(client_conn, &blocked));
 
         /* Next message sent will trigger key update message */
-        s2n_blocked_status blocked;
         char client_message[] = "client message";
         EXPECT_SUCCESS(s2n_send(client_conn, client_message, sizeof(client_message), &blocked));
 

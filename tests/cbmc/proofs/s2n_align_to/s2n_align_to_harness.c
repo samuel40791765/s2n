@@ -13,12 +13,11 @@
  * permissions and limitations under the License.
  */
 
+#include <assert.h>
+#include <cbmc_proof/make_common_datastructures.h>
+
 #include "api/s2n.h"
 #include "utils/s2n_safety.h"
-
-#include <assert.h>
-#include <cbmc_proof/proof_allocators.h>
-#include <cbmc_proof/make_common_datastructures.h>
 
 int s2n_align_to_harness()
 {
@@ -26,20 +25,20 @@ int s2n_align_to_harness()
     const uint32_t alignment;
     /* Division and modulo are too slow in CBMC to perform all necessary checks,
      * so relevant assertions that can't be used currently have been left in comments. */
-    uint32_t *out = can_fail_malloc(sizeof(uint32_t));
- /* uint64_t result = (uint64_t) alignment * ((((uint64_t) initial - 1) / (uint64_t) alignment) + 1); */
+    uint32_t *out = malloc(sizeof(uint32_t));
+    /* uint64_t result = (uint64_t) alignment * ((((uint64_t) initial - 1) / (uint64_t) alignment) + 1); */
 
     if (s2n_align_to(initial, alignment, out) == S2N_SUCCESS) {
         if (initial == 0) {
             assert(*out == 0);
         } else {
-         /* assert(*out >= initial); */
-         /* assert(*out < (uint64_t) initial + (uint64_t) alignment); */
-         /* assert(result <= UINT32_MAX); */
-         /* assert(*out % alignment == 0); */
+            /* assert(*out >= initial); */
+            /* assert(*out < (uint64_t) initial + (uint64_t) alignment); */
+            /* assert(result <= UINT32_MAX); */
+            /* assert(*out % alignment == 0); */
         }
     } else {
-     /* assert(*out % alignment != 0 || out == NULL); */
-     /* assert(result > UINT32_MAX || out == NULL); */
+        /* assert(*out % alignment != 0 || out == NULL); */
+        /* assert(result > UINT32_MAX || out == NULL); */
     }
 }

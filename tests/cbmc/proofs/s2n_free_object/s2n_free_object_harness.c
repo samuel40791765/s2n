@@ -13,30 +13,33 @@
  * permissions and limitations under the License.
  */
 
-#include "api/s2n.h"
-
 #include <assert.h>
 #include <cbmc_proof/cbmc_utils.h>
 #include <cbmc_proof/make_common_datastructures.h>
-#include <cbmc_proof/proof_allocators.h>
 
-void s2n_free_object_harness() {
+#include "api/s2n.h"
+
+void s2n_free_object_harness()
+{
+    /* Non-deterministic inputs. */
     uint32_t size;
-    uint8_t * data = can_fail_malloc( size );
-    uint8_t * old_data = data;
+    uint8_t *data = malloc(size);
 
-    /* Non-deterministically set initialized (in s2n_mem) to true. */
-    if(nondet_bool()) {
-        s2n_mem_init();
-    }
+    nondet_s2n_mem_init();
 
+    uint8_t *old_data = data;
+
+    /* Operation under verification. */
     if (s2n_free_object(&data, size) == S2N_SUCCESS) {
         assert(data == NULL);
     }
 
 #pragma CPROVER check push
 #pragma CPROVER check disable "pointer"
-    /* Verify that the memory was zeroed */
+    /*
+     * Regardless of the result of s2n_free, verify that the
+     * data pointed to in the blob was zeroed.
+    */
     if (size > 0 && old_data != NULL) {
         size_t i;
         __CPROVER_assume(i < size);

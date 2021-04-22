@@ -58,29 +58,29 @@ static int s2n_setup_handler_to_expect(message_type_t expected, uint8_t directio
 
 static int s2n_test_write_header(struct s2n_stuffer *output, uint8_t record_type, uint8_t message_type)
 {
-    GUARD(s2n_stuffer_write_uint8(output, record_type));
+    POSIX_GUARD(s2n_stuffer_write_uint8(output, record_type));
 
     /* TLS1.2 protocol version */
-    GUARD(s2n_stuffer_write_uint8(output, 3));
-    GUARD(s2n_stuffer_write_uint8(output, 3));
+    POSIX_GUARD(s2n_stuffer_write_uint8(output, 3));
+    POSIX_GUARD(s2n_stuffer_write_uint8(output, 3));
 
     if (record_type == TLS_HANDSHAKE) {
         /* Total message size */
-        GUARD(s2n_stuffer_write_uint16(output, 4));
+        POSIX_GUARD(s2n_stuffer_write_uint16(output, 4));
 
-        GUARD(s2n_stuffer_write_uint8(output, message_type));
+        POSIX_GUARD(s2n_stuffer_write_uint8(output, message_type));
 
         /* Handshake message data size */
-        GUARD(s2n_stuffer_write_uint24(output, 0));
+        POSIX_GUARD(s2n_stuffer_write_uint24(output, 0));
         return 0;
     }
 
     if (record_type == TLS_CHANGE_CIPHER_SPEC) {
         /* Total message size */
-        GUARD(s2n_stuffer_write_uint16(output, 1));
+        POSIX_GUARD(s2n_stuffer_write_uint16(output, 1));
 
         /* change spec is always just 0x01 */
-        GUARD(s2n_stuffer_write_uint8(output, 1));
+        POSIX_GUARD(s2n_stuffer_write_uint8(output, 1));
         return 0;
     }
 
@@ -90,6 +90,7 @@ static int s2n_test_write_header(struct s2n_stuffer *output, uint8_t record_type
 int main(int argc, char **argv)
 {
     BEGIN_TEST();
+    EXPECT_SUCCESS(s2n_disable_tls13());
 
     /* Construct an array of all valid tls1.2 handshake_types */
     uint16_t valid_tls12_handshakes[S2N_HANDSHAKES_COUNT];
@@ -350,9 +351,23 @@ int main(int argc, char **argv)
         }
     }
 
+    /* Test: TLS1.2 handshake type name maximum size is set correctly.
+     * The maximum size is the size of a name with all flags set. */
+    {
+        size_t correct_size = 0;
+        for (size_t i = 0; i < s2n_array_len(tls12_handshake_type_names); i++) {
+            correct_size += strlen(tls12_handshake_type_names[i]);
+        }
+        if (correct_size > MAX_HANDSHAKE_TYPE_LEN) {
+            fprintf(stderr, "\nMAX_HANDSHAKE_TYPE_LEN should be at least %lu\n", (unsigned long) correct_size);
+            FAIL_MSG("MAX_HANDSHAKE_TYPE_LEN wrong for TLS1.2 handshakes");
+        }
+    }
+
     /* Test: TLS 1.2 handshake types are all properly printed */
     {
         struct s2n_connection *conn = s2n_connection_new(S2N_SERVER);
+        conn->actual_protocol_version = S2N_TLS12;
 
         conn->handshake.handshake_type = INITIAL;
         EXPECT_STRING_EQUAL("INITIAL", s2n_connection_get_handshake_type_name(conn));
@@ -360,10 +375,10 @@ int main(int argc, char **argv)
         conn->handshake.handshake_type = NEGOTIATED | FULL_HANDSHAKE;
         EXPECT_STRING_EQUAL("NEGOTIATED|FULL_HANDSHAKE", s2n_connection_get_handshake_type_name(conn));
 
-        const char* all_flags_handshake_type_name = "NEGOTIATED|FULL_HANDSHAKE|TLS12_PERFECT_FORWARD_SECRECY|"
-                "OCSP_STATUS|CLIENT_AUTH|WITH_SESSION_TICKET|NO_CLIENT_CERT";
-        conn->handshake.handshake_type = NEGOTIATED | FULL_HANDSHAKE | TLS12_PERFECT_FORWARD_SECRECY | \
-                OCSP_STATUS | CLIENT_AUTH | WITH_SESSION_TICKET | NO_CLIENT_CERT;
+        const char* all_flags_handshake_type_name = "NEGOTIATED|FULL_HANDSHAKE|CLIENT_AUTH|NO_CLIENT_CERT|"
+                "TLS12_PERFECT_FORWARD_SECRECY|OCSP_STATUS|WITH_SESSION_TICKET";
+        conn->handshake.handshake_type = NEGOTIATED | FULL_HANDSHAKE | CLIENT_AUTH | NO_CLIENT_CERT | \
+                TLS12_PERFECT_FORWARD_SECRECY | OCSP_STATUS | WITH_SESSION_TICKET;
         EXPECT_STRING_EQUAL(all_flags_handshake_type_name, s2n_connection_get_handshake_type_name(conn));
 
         const char *handshake_type_name;

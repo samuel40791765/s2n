@@ -40,6 +40,8 @@
 #define TARGET_x86 2
 #define TARGET_ARM 3
 #define TARGET_ARM64 4
+#define TARGET_PPC64 5
+#define TARGET_RISCV64 6
 
 #if defined(__x86_64__)
 #define TARGET TARGET_AMD64
@@ -65,6 +67,18 @@ typedef uint16_t hdigit_t; // Unsigned 16-bit digit
 #define LOG2RADIX 6
 typedef uint64_t digit_t;  // Unsigned 64-bit digit
 typedef uint32_t hdigit_t; // Unsigned 32-bit digit
+#elif defined(__powerpc64__)
+#define TARGET TARGET_PPC64
+#define RADIX 64
+#define LOG2RADIX 6
+typedef uint64_t digit_t;  // Unsigned 64-bit digit
+typedef uint32_t hdigit_t; // Unsigned 32-bit digit
+#elif defined(__riscv) && (__riscv_xlen == 64)
+#define TARGET TARGET_RISCV64
+#define RADIX 64
+#define LOG2RADIX 6
+typedef uint64_t digit_t;  // Unsigned 64-bit digit
+typedef uint32_t hdigit_t; // Unsigned 32-bit digit
 #else
 #error-- "Unsupported ARCHITECTURE"
 #endif
@@ -72,7 +86,7 @@ typedef uint32_t hdigit_t; // Unsigned 32-bit digit
 #define RADIX64 64
 
 // Extended datatype support
-#if defined(S2N_NO_PQ_ASM)
+#if !defined(S2N_SIKEP434R2_ASM)
 typedef uint64_t uint128_t[2];
 #elif (TARGET == TARGET_AMD64 && OS_TARGET == OS_LINUX)
 typedef unsigned uint128_t __attribute__((mode(TI)));
@@ -109,7 +123,7 @@ unsigned int is_digit_lessthan_ct(digit_t x, digit_t y) { // Is x < y?
 
 /********************** Macros for platform-dependent operations **********************/
 
-#if defined(S2N_NO_PQ_ASM) || (TARGET == TARGET_ARM)
+#if (!defined(S2N_SIKEP434R2_ASM)) || (TARGET == TARGET_ARM)
 
 // Digit multiplication
 #define MUL(multiplier, multiplicand, hi, lo) \

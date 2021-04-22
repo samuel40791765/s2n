@@ -101,13 +101,13 @@ static int try_handshake(struct s2n_connection *server_conn, struct s2n_connecti
         }
 
         if (server_blocked == S2N_BLOCKED_ON_APPLICATION_INPUT) {
-            GUARD(handler(server_conn));
+            POSIX_GUARD(handler(server_conn));
         }
 
         EXPECT_NOT_EQUAL(++tries, 5);
     } while (client_blocked || server_blocked);
 
-    GUARD(s2n_shutdown_test_server_and_client(server_conn, client_conn));
+    POSIX_GUARD(s2n_shutdown_test_server_and_client(server_conn, client_conn));
 
     return S2N_SUCCESS;
 }
@@ -145,6 +145,7 @@ int async_pkey_store_callback(struct s2n_connection *conn, struct s2n_async_pkey
 int main(int argc, char **argv)
 {
     BEGIN_TEST();
+    EXPECT_SUCCESS(s2n_disable_tls13());
 
     char dhparams_pem[S2N_MAX_TEST_PEM_SIZE];
     EXPECT_SUCCESS(s2n_read_test_pem(S2N_DEFAULT_TEST_DHPARAMS, dhparams_pem, S2N_MAX_TEST_PEM_SIZE));

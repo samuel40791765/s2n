@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License").
@@ -65,16 +65,41 @@ for file in $S2N_FILES_ASSERT_NOTNULL_CHECK; do
     # $line_one definitely contains an assignment from s2n_stuffer_raw_read(),
     # because that's what we grepped for. So verify that either $line_one or
     # $line_two contains a null check.
-    manual_null_check_regex=".*(if|ENSURE_POSIX).*=\ NULL"
+    manual_null_check_regex="(.*(if|ENSURE_POSIX|POSIX_ENSURE).*=\ NULL)|(ENSURE_REF)"
     if [[ $line_one == *"notnull_check("* ]] || [[ $line_one =~ $manual_null_check_regex ]] ||\
     [[ $line_two == *"notnull_check("* ]] || [[ $line_two =~ $manual_null_check_regex ]]; then
       # Found a notnull_check
       continue
     else
       FAILED=1
-      printf "\e[1;34mFound a call to s2n_stuffer_raw_read without a notnull_check in $file:\e[0m\n$line_one\n\n"
+      printf "\e[1;34mFound a call to s2n_stuffer_raw_read without an ENSURE_REF in $file:\e[0m\n$line_one\n\n"
     fi
   done < <(grep -rnE -A 1 "=\ss2n_stuffer_raw_read\(.*\)" $file)
+done
+
+# Assert that "index" is not a variable name. An "index" function exists in strings.h, and older compilers (<GCC 4.8) 
+# warn if any local variables called "index" are used because they are considered to shadow that declaration. 
+S2N_FILES_ASSERT_VARIABLE_NAME_INDEX=$(find "$PWD" -type f -name "s2n*.[ch]")
+for file in $S2N_FILES_ASSERT_VARIABLE_NAME_INDEX; do
+  RESULT_VARIABLE_NAME_INDEX=`gcc -fpreprocessed -dD -E -w $file | grep -v '"' | grep '[\*|,|;|[:space:]]index[;|,|\)|[:space:]]'`
+  if [ "${#RESULT_VARIABLE_NAME_INDEX}" != "0" ]; then
+    FAILED=1
+    printf "\e[1;34mGrep for variable name 'index' check failed in $file:\e[0m\n$RESULT_VARIABLE_NAME_INDEX\n\n"
+  fi
+done
+
+## Assert that there are no new uses of S2N_ERROR_IF
+# TODO add crypto, tls (see https://github.com/aws/s2n-tls/issues/2635)
+S2N_ERROR_IF_FREE="bin error pq-crypto scram stuffer utils tests"
+for dir in $S2N_ERROR_IF_FREE; do
+  files=$(find "$dir" -type f -name "*.c" -path "*")
+  for file in $files; do
+    result=`grep -Ern 'S2N_ERROR_IF' $file`
+    if [ "${#result}" != "0" ]; then
+      FAILED=1
+      printf "\e[1;34mUsage of 'S2N_ERROR_IF' check failed. Use 'POSIX_ENSURE' instead in $file:\e[0m\n$result\n\n"
+    fi
+  done
 done
 
 if [ $FAILED == 1 ]; then

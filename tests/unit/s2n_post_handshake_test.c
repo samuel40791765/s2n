@@ -25,12 +25,22 @@
 #include "tls/s2n_post_handshake.h"
 #include "utils/s2n_safety.h"
 
+/* Include to get access to the handshake state machine
+ * to verify we don't allow its messages post-handshake.
+ */
+#include "tls/s2n_handshake_io.c"
+
+#define KEY_UPDATE_MESSAGE_SIZE sizeof(uint8_t) + /* message id */  \
+                                SIZEOF_UINT24   + /* message len */ \
+                                sizeof(uint8_t)   /* message */
+
 int s2n_key_update_write(struct s2n_blob *out);
 
 int main(int argc, char **argv)
 {
 
     BEGIN_TEST();
+    EXPECT_SUCCESS(s2n_disable_tls13());
     /* s2n_post_handshake_recv */
     {   
         /* post_handshake_recv processes a key update requested message */
@@ -100,6 +110,73 @@ int main(int argc, char **argv)
 
             EXPECT_SUCCESS(s2n_connection_free(conn)); 
         }
+
+        /* Functional test: Multiple post handshake messages can be received in the same record */
+        {
+            struct s2n_connection *conn = s2n_connection_new(S2N_SERVER);
+            EXPECT_NOT_NULL(conn);
+            conn->actual_protocol_version = S2N_TLS13;
+            conn->secure.cipher_suite = &s2n_tls13_aes_256_gcm_sha384;
+            uint8_t num_key_updates = 3;
+
+            /* Write three key update messages in one record. We cannot call s2n_post_handshake_send
+             * multiple times here because s2n only sends one handshake message per record */
+            for (size_t i = 0; i < num_key_updates; i++) {
+                uint8_t data[KEY_UPDATE_MESSAGE_SIZE] = { 0 };
+                struct s2n_blob key_update_message = { 0 };
+                EXPECT_SUCCESS(s2n_blob_init(&key_update_message, data, sizeof(data)));
+                EXPECT_SUCCESS(s2n_key_update_write(&key_update_message));
+                EXPECT_SUCCESS(s2n_stuffer_write_bytes(&conn->in, key_update_message.data, key_update_message.size));
+            }
+
+            EXPECT_SUCCESS(s2n_post_handshake_recv(conn));
+
+            /* All three key update messages have been read */
+            EXPECT_EQUAL(s2n_stuffer_data_available(&conn->in), 0);
+
+            EXPECT_SUCCESS(s2n_connection_free(conn));
+        }
+
+        /* No non-post handshake messages can be received.
+         * This means that no handshake message that appears in the handshake state machine
+         * should be allowed.
+         */
+        {
+            /* For TLS1.2 */
+            for (size_t i = 0; i < s2n_array_len(state_machine); i++) {
+                if (state_machine[i].record_type != TLS_HANDSHAKE) {
+                    break;
+                }
+
+                struct s2n_connection *conn;
+                EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_SERVER));
+                conn->actual_protocol_version = S2N_TLS13;
+
+                EXPECT_SUCCESS(s2n_stuffer_write_uint8(&conn->in, state_machine[i].message_type));
+                EXPECT_SUCCESS(s2n_stuffer_write_uint24(&conn->in, 0));
+                EXPECT_FAILURE_WITH_ERRNO(s2n_post_handshake_recv(conn), S2N_ERR_BAD_MESSAGE);
+
+                EXPECT_SUCCESS(s2n_connection_free(conn));
+            }
+
+            /* For TLS1.3 */
+            for (size_t i = 0; i < s2n_array_len(tls13_state_machine); i++) {
+                if (tls13_state_machine[i].record_type != TLS_HANDSHAKE) {
+                    break;
+                }
+
+                struct s2n_connection *conn;
+                EXPECT_NOT_NULL(conn = s2n_connection_new(S2N_SERVER));
+                conn->actual_protocol_version = S2N_TLS13;
+
+                EXPECT_SUCCESS(s2n_stuffer_write_uint8(&conn->in, tls13_state_machine[i].message_type));
+                EXPECT_SUCCESS(s2n_stuffer_write_uint24(&conn->in, 0));
+                EXPECT_FAILURE_WITH_ERRNO(s2n_post_handshake_recv(conn), S2N_ERR_BAD_MESSAGE);
+
+                EXPECT_SUCCESS(s2n_connection_free(conn));
+            }
+        }
+
     }
 
     /* post_handshake_send */

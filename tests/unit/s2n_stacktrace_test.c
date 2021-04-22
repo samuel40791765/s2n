@@ -21,12 +21,14 @@
 
 int raises_error()
 {
-  S2N_ERROR(S2N_ERR_INVALID_ARGUMENT);
+  POSIX_BAIL(S2N_ERR_INVALID_ARGUMENT);
 }
 
 int main(int argc, char **argv)
 {
     BEGIN_TEST();
+    EXPECT_SUCCESS(s2n_disable_tls13());
+#ifdef S2N_HAVE_EXECINFO
     EXPECT_SUCCESS(s2n_stack_traces_enabled_set(true));
     struct s2n_stacktrace trace;
     /* If nothing has errored yet, we have no stacktrace */
@@ -48,4 +50,7 @@ int main(int argc, char **argv)
     /* Free the stacktrace to avoid memory leaks */
     EXPECT_SUCCESS(s2n_free_stacktrace());
     END_TEST();
+#else
+    END_TEST();
+#endif
 }

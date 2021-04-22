@@ -41,7 +41,6 @@
 #include <s2n.h>
 #include "common.h"
 
-#include "tls/s2n_tls13.h"
 #include "utils/s2n_safety.h"
 
 #define MAX_CERTIFICATES 50
@@ -167,16 +166,16 @@ int cache_store_callback(struct s2n_connection *conn, void *ctx, uint64_t ttl, c
 {
     struct session_cache_entry *cache = ctx;
 
-    S2N_ERROR_IF(key_size == 0 || key_size > MAX_KEY_LEN, S2N_ERR_INVALID_ARGUMENT);
-    S2N_ERROR_IF(value_size == 0 || value_size > MAX_VAL_LEN, S2N_ERR_INVALID_ARGUMENT);
+    POSIX_ENSURE_INCLUSIVE_RANGE(1, key_size, MAX_KEY_LEN);
+    POSIX_ENSURE_INCLUSIVE_RANGE(1, value_size, MAX_VAL_LEN);
 
-    uint8_t index = ((const uint8_t *)key)[0];
+    uint8_t idx = ((const uint8_t *)key)[0];
 
-    memcpy(cache[index].key, key, key_size);
-    memcpy(cache[index].value, value, value_size);
+    memcpy(cache[idx].key, key, key_size);
+    memcpy(cache[idx].value, value, value_size);
 
-    cache[index].key_len = key_size;
-    cache[index].value_len = value_size;
+    cache[idx].key_len = key_size;
+    cache[idx].value_len = value_size;
 
     return 0;
 }
@@ -185,18 +184,18 @@ int cache_retrieve_callback(struct s2n_connection *conn, void *ctx, const void *
 {
     struct session_cache_entry *cache = ctx;
 
-    S2N_ERROR_IF(key_size == 0 || key_size > MAX_KEY_LEN, S2N_ERR_INVALID_ARGUMENT);
+    POSIX_ENSURE_INCLUSIVE_RANGE(1, key_size, MAX_KEY_LEN);
 
-    uint8_t index = ((const uint8_t *)key)[0];
+    uint8_t idx = ((const uint8_t *)key)[0];
 
-    S2N_ERROR_IF(cache[index].key_len != key_size, S2N_ERR_INVALID_ARGUMENT);
-    S2N_ERROR_IF(memcmp(cache[index].key, key, key_size), S2N_ERR_INVALID_ARGUMENT);
-    S2N_ERROR_IF(*value_size < cache[index].value_len, S2N_ERR_INVALID_ARGUMENT);
+    POSIX_ENSURE(cache[idx].key_len == key_size, S2N_ERR_INVALID_ARGUMENT);
+    POSIX_ENSURE(memcmp(cache[idx].key, key, key_size) == 0, S2N_ERR_INVALID_ARGUMENT);
+    POSIX_ENSURE(*value_size >= cache[idx].value_len, S2N_ERR_INVALID_ARGUMENT);
 
-    *value_size = cache[index].value_len;
-    memcpy(value, cache[index].value, cache[index].value_len);
+    *value_size = cache[idx].value_len;
+    memcpy(value, cache[idx].value, cache[idx].value_len);
 
-    for (int i = 0; i < key_size; i++) {
+    for (uint64_t i = 0; i < key_size; i++) {
         printf("%02x", ((const uint8_t *)key)[i]);
     }
     printf("\n");
@@ -208,15 +207,17 @@ int cache_delete_callback(struct s2n_connection *conn, void *ctx, const void *ke
 {
     struct session_cache_entry *cache = ctx;
 
-    S2N_ERROR_IF(key_size == 0 || key_size > MAX_KEY_LEN, S2N_ERR_INVALID_ARGUMENT);
+    POSIX_ENSURE_INCLUSIVE_RANGE(1, key_size, MAX_KEY_LEN);
 
-    uint8_t index = ((const uint8_t *)key)[0];
+    uint8_t idx = ((const uint8_t *)key)[0];
 
-    S2N_ERROR_IF(cache[index].key_len != 0 && cache[index].key_len != key_size, S2N_ERR_INVALID_ARGUMENT);
-    S2N_ERROR_IF(cache[index].key_len != 0 && memcmp(cache[index].key, key, key_size), S2N_ERR_INVALID_ARGUMENT);
+    if (cache[idx].key_len != 0) {
+        POSIX_ENSURE(cache[idx].key_len == key_size, S2N_ERR_INVALID_ARGUMENT);
+        POSIX_ENSURE(memcmp(cache[idx].key, key, key_size) == 0, S2N_ERR_INVALID_ARGUMENT);
+    }
 
-    cache[index].key_len = 0;
-    cache[index].value_len = 0;
+    cache[idx].key_len = 0;
+    cache[idx].value_len = 0;
 
     return 0;
 }
@@ -281,14 +282,14 @@ void usage()
     fprintf(stderr, "    Disable session ticket for resumption.\n");
     fprintf(stderr, "  -C,--corked-io\n");
     fprintf(stderr, "    Turn on corked io\n");
-    fprintf(stderr, "  --tls13\n");
-    fprintf(stderr, "    Turn on experimental TLS1.3 support.\n");
     fprintf(stderr, "  --non-blocking\n");
     fprintf(stderr, "    Set the non-blocking flag on the connection's socket.\n");
     fprintf(stderr, "  -w --https-server\n");
     fprintf(stderr, "    Run s2nd in a simple https server mode.\n");
     fprintf(stderr, "  -b --https-bench <bytes>\n");
     fprintf(stderr, "    Send number of bytes in https server mode to test throughput.\n");
+    fprintf(stderr, "  -L --key-log <path>\n");
+    fprintf(stderr, "    Enable NSS key logging into the provided path\n");
     fprintf(stderr, "  -h,--help\n");
     fprintf(stderr, "    Display this message and quit.\n");
 
@@ -371,8 +372,16 @@ int handle_connection(int fd, struct s2n_config *config, struct conn_settings se
         echo(conn, fd);
     }
 
+    /* The following call can block on receiving a close_notify if we initiate the shutdown or if the */
+    /* peer fails to send a close_notify. */
+    /* TODO: However, we should expect to receive a close_notify from the peer and shutdown gracefully. */
+    /* Please see tracking issue for more detail: https://github.com/aws/s2n-tls/issues/2692 */
     s2n_blocked_status blocked;
-    s2n_shutdown(conn, &blocked);
+    int shutdown_rc = s2n_shutdown(conn, &blocked);
+    if (shutdown_rc == -1 && blocked != S2N_BLOCKED_ON_READ) {
+        fprintf(stderr, "Unexpected error during shutdown: '%s'\n", s2n_strerror(s2n_errno, "NULL"));
+        exit(1);
+    }
 
     GUARD_RETURN(s2n_connection_wipe(conn), "Error wiping connection");
 
@@ -394,6 +403,7 @@ int main(int argc, char *const *argv)
     const char *session_ticket_key_file_path = NULL;
     const char *cipher_prefs = "default";
     const char *alpn = NULL;
+    const char *key_log_path = NULL;
 
     /* The certificates provided by the user. If there are none provided, we will use the hardcoded default cert.
      * The associated private key for each cert will be at the same index in private_keys. If the user mixes up the
@@ -407,7 +417,6 @@ int main(int argc, char *const *argv)
     struct conn_settings conn_settings = { 0 };
     int fips_mode = 0;
     int parallelize = 0;
-    int use_tls13 = 0;
     int non_blocking = 0;
     long int bytes = 0;
     conn_settings.session_ticket = 1;
@@ -440,6 +449,7 @@ int main(int argc, char *const *argv)
         {"https-bench", required_argument, 0, 'b'},
         {"alpn", required_argument, 0, 'A'},
         {"non-blocking", no_argument, 0, 'B'},
+        {"key-log", required_argument, 0, 'L'},
         /* Per getopt(3) the last element of the array has to be filled with all zeros */
         { 0 },
     };
@@ -519,7 +529,7 @@ int main(int argc, char *const *argv)
             conn_settings.session_ticket = 0;
             break;
         case '3':
-            use_tls13 = 1;
+            /* Do nothing -- this argument is deprecated */
             break;
         case 'X':
             if (optarg == NULL) {
@@ -542,6 +552,9 @@ int main(int argc, char *const *argv)
             break;
         case 'B':
             non_blocking = 1;
+            break;
+        case 'L':
+            key_log_path = optarg;
             break;
         case '?':
         default:
@@ -628,10 +641,6 @@ int main(int argc, char *const *argv)
         fprintf(stderr, "Error entering FIPS mode. s2nd is not linked with a FIPS-capable libcrypto.\n");
         exit(1);
 #endif
-    }
-
-    if (use_tls13) {
-        GUARD_EXIT(s2n_enable_tls13(), "Error enabling TLS1.3");
     }
 
     GUARD_EXIT(s2n_init(), "Error running s2n_init()");
@@ -727,7 +736,7 @@ int main(int argc, char *const *argv)
             GUARD_EXIT(fstat(fd, &st), "Error fstat-ing session ticket key file");
 
             st_key = mmap(0, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-            S2N_ERROR_IF(st_key == MAP_FAILED, S2N_ERR_MMAP);
+            POSIX_ENSURE(st_key != MAP_FAILED, S2N_ERR_MMAP);
 
             st_key_length = st.st_size;
 
@@ -747,7 +756,9 @@ int main(int argc, char *const *argv)
         struct sigaction sa;
 
         sa.sa_handler = SIG_IGN;
+#if defined(SA_NOCLDWAIT)
         sa.sa_flags = SA_NOCLDWAIT;
+#endif
         sigemptyset(&sa.sa_mask);
         sigaction(SIGCHLD, &sa, NULL);
     }
@@ -755,6 +766,21 @@ int main(int argc, char *const *argv)
     if (alpn) {
         const char *protocols[] = { alpn };
         GUARD_EXIT(s2n_config_set_protocol_preferences(config, protocols, s2n_array_len(protocols)), "Failed to set alpn");
+    }
+
+    FILE *key_log_file = NULL;
+
+    if (key_log_path) {
+        key_log_file = fopen(key_log_path, "a");
+        GUARD_EXIT(key_log_file == NULL ? S2N_FAILURE : S2N_SUCCESS, "Failed to open key log file");
+        GUARD_EXIT(
+            s2n_config_set_key_log_cb(
+                config,
+                key_log_callback,
+                (void *)key_log_file
+            ),
+            "Failed to set key log callback"
+        );
     }
 
     int fd;
@@ -802,6 +828,10 @@ int main(int argc, char *const *argv)
                 continue;
             }
         }
+    }
+
+    if (key_log_file) {
+        fclose(key_log_file);
     }
 
     GUARD_EXIT(s2n_cleanup(),  "Error running s2n_cleanup()");

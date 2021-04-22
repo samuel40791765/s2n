@@ -25,15 +25,16 @@
 #include "tls/s2n_client_hello.h"
 #include "tls/s2n_config.h"
 #include "tls/s2n_crypto.h"
+#include "tls/s2n_early_data.h"
 #include "tls/s2n_handshake.h"
 #include "tls/s2n_prf.h"
+#include "tls/s2n_quic_support.h"
 #include "tls/s2n_tls_parameters.h"
 #include "tls/s2n_x509_validator.h"
 #include "tls/s2n_key_update.h"
 #include "tls/s2n_kem_preferences.h"
 #include "tls/s2n_ecc_preferences.h"
 #include "tls/s2n_security_policies.h"
-
 
 #include "crypto/s2n_hash.h"
 #include "crypto/s2n_hmac.h"
@@ -60,6 +61,10 @@ struct s2n_connection {
 
     /* The user defined context associated with connection */
     void *context;
+
+    /* The user defined secret callback and context */
+    s2n_secret_cb secret_cb;
+    void *secret_cb_context;
 
     /* The send and receive callbacks don't have to be the same (e.g. two pipes) */
     s2n_send_fn *send;
@@ -94,15 +99,6 @@ struct s2n_connection {
     /* Was the EC point formats sent by the client */
     unsigned ec_point_formats:1;
 
-    /* Track request extensions to ensure correct response extension behavior.
-     *
-     * We need to track client and server extensions separately because some
-     * extensions (like request_status and other Certificate extensions) can
-     * be requested by the client, the server, or both.
-     */
-    s2n_extension_bitfield extension_requests_sent;
-    s2n_extension_bitfield extension_requests_received;
-
     /* whether the connection address is ipv6 or not */
     unsigned ipv6:1;
 
@@ -114,7 +110,16 @@ struct s2n_connection {
 
     /* If write fd is broken */
     unsigned write_fd_broken:1;
-    
+
+    /* Track request extensions to ensure correct response extension behavior.
+     *
+     * We need to track client and server extensions separately because some
+     * extensions (like request_status and other Certificate extensions) can
+     * be requested by the client, the server, or both.
+     */
+    s2n_extension_bitfield extension_requests_sent;
+    s2n_extension_bitfield extension_requests_received;
+
     /* Is this connection a client or a server connection */
     s2n_mode mode;
 
@@ -159,6 +164,9 @@ struct s2n_connection {
 
     /* Contains parameters needed during the handshake phase */
     struct s2n_handshake_parameters handshake_params;
+
+    /* Our PSK parameters */
+    struct s2n_psk_parameters psk_params;
 
     /* The PRF needs some storage elements to work with */
     struct s2n_prf_working_space prf_space;
@@ -240,6 +248,7 @@ struct s2n_connection {
     /* Keep some accounting on each connection */
     uint64_t wire_bytes_in;
     uint64_t wire_bytes_out;
+    uint64_t early_data_bytes;
 
     /* Is the connection open or closed ? We use C's only
      * atomic type as both the reader and the writer threads
@@ -275,6 +284,10 @@ struct s2n_connection {
     s2n_ct_support_level ct_level_requested;
     struct s2n_blob ct_response;
 
+    /* QUIC transport parameters data: https://tools.ietf.org/html/draft-ietf-quic-tls-29#section-8.2 */
+    struct s2n_blob our_quic_transport_parameters;
+    struct s2n_blob peer_quic_transport_parameters;
+
     struct s2n_client_hello client_hello;
 
     struct s2n_x509_validator x509_validator;
@@ -293,8 +306,10 @@ struct s2n_connection {
     uint32_t ticket_lifetime_hint;
 
     /* Session ticket extension from client to attempt to decrypt as the server. */
-    uint8_t ticket_ext_data[S2N_TICKET_SIZE_IN_BYTES];
+    uint8_t ticket_ext_data[S2N_TLS12_TICKET_SIZE_IN_BYTES];
     struct s2n_stuffer client_ticket_to_decrypt;
+
+    uint8_t resumption_master_secret[S2N_TLS13_SECRET_MAX_LEN];
 
     /* application protocols overridden */
     struct s2n_blob application_protocols_overridden;
@@ -305,6 +320,23 @@ struct s2n_connection {
     /* Key update data */
     unsigned key_update_pending:1;
 
+    /* Early data supported by caller.
+     * If a caller does not use any APIs that support early data,
+     * do not negotiate early data.
+     */
+    unsigned early_data_expected:1;
+
+    /* Connection overrides server_max_early_data_size */
+    unsigned server_max_early_data_size_overridden:1;
+
+    /* Connection overrides psk_mode.
+     * This means that the connection will keep the existing value of psk_params->type,
+     * even when setting a new config. */
+    unsigned psk_mode_overridden:1;
+
+    /* Have we received a close notify alert from the peer. */
+    unsigned close_notify_received:1;
+
     /* Bitmap to represent preferred list of keyshare for client to generate and send keyshares in the ClientHello message.
      * The least significant bit (lsb), if set, indicates that the client must send an empty keyshare list.
      * Each bit value in the bitmap indiciates the corresponding curve in the ecc_preferences list for which a key share needs to be generated.
@@ -312,6 +344,19 @@ struct s2n_connection {
      * Setting and manipulating this value requires security_policy to be configured prior.
      * */
     uint8_t preferred_key_shares;
+
+    /* Flags to prevent users from calling methods recursively.
+     * This can be an easy mistake to make when implementing send/receive callbacks.
+     */
+    bool send_in_use;
+    bool recv_in_use;
+    
+    uint16_t tickets_to_send;
+    uint16_t tickets_sent;
+
+    s2n_early_data_state early_data_state;
+    uint32_t server_max_early_data_size;
+    struct s2n_blob server_early_data_context;
 };
 
 int s2n_connection_is_managed_corked(const struct s2n_connection *s2n_connection);
@@ -324,6 +369,8 @@ int s2n_connection_kill(struct s2n_connection *conn);
 int s2n_connection_send_stuffer(struct s2n_stuffer *stuffer, struct s2n_connection *conn, uint32_t len);
 int s2n_connection_recv_stuffer(struct s2n_stuffer *stuffer, struct s2n_connection *conn, uint32_t len);
 
+S2N_RESULT s2n_connection_wipe_all_keyshares(struct s2n_connection *conn);
+
 int s2n_connection_get_cipher_preferences(struct s2n_connection *conn, const struct s2n_cipher_preferences **cipher_preferences);
 int s2n_connection_get_security_policy(struct s2n_connection *conn, const struct s2n_security_policy **security_policy);
 int s2n_connection_get_kem_preferences(struct s2n_connection *conn, const struct s2n_kem_preferences **kem_preferences);
@@ -333,6 +380,7 @@ int s2n_connection_get_protocol_preferences(struct s2n_connection *conn, struct 
 int s2n_connection_set_client_auth_type(struct s2n_connection *conn, s2n_cert_auth_type cert_auth_type);
 int s2n_connection_get_client_auth_type(struct s2n_connection *conn, s2n_cert_auth_type *client_cert_auth_type);
 int s2n_connection_get_client_cert_chain(struct s2n_connection *conn, uint8_t **der_cert_chain_out, uint32_t *cert_chain_len);
+int s2n_connection_get_peer_cert_chain(const struct s2n_connection *conn, struct s2n_cert_chain_and_key *cert_chain_and_key);
 uint8_t s2n_connection_get_protocol_version(const struct s2n_connection *conn);
 /* `none` keyword represents a list of empty keyshares */
 int s2n_connection_set_keyshare_by_name_for_testing(struct s2n_connection *conn, const char* curve_name);

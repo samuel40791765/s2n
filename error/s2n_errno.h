@@ -56,6 +56,7 @@ typedef enum {
     /* S2N_ERR_T_BLOCKED */
     S2N_ERR_IO_BLOCKED = S2N_ERR_T_BLOCKED_START,
     S2N_ERR_ASYNC_BLOCKED,
+    S2N_ERR_EARLY_DATA_BLOCKED,
     S2N_ERR_T_BLOCKED_END,
 
     /* S2N_ERR_T_ALERT */
@@ -67,6 +68,7 @@ typedef enum {
     S2N_ERR_DECRYPT,
     S2N_ERR_BAD_MESSAGE,
     S2N_ERR_KEY_INIT,
+    S2N_ERR_KEY_DESTROY,
     S2N_ERR_DH_SERIALIZING,
     S2N_ERR_DH_SHARED_SECRET,
     S2N_ERR_DH_WRITING_PUBLIC_KEY,
@@ -88,7 +90,6 @@ typedef enum {
     S2N_ERR_INVALID_HELLO_RETRY,
     S2N_ERR_INVALID_SIGNATURE_ALGORITHM,
     S2N_ERR_INVALID_SIGNATURE_SCHEME,
-    S2N_ERR_EMPTY_SIGNATURE_SCHEME,
     S2N_ERR_CBC_VERIFY,
     S2N_ERR_DH_COPYING_PUBLIC_KEY,
     S2N_ERR_SIGN,
@@ -111,7 +112,6 @@ typedef enum {
     S2N_ERR_BAD_KEY_SHARE,
     S2N_ERR_CANCELLED,
     S2N_ERR_PROTOCOL_DOWNGRADE_DETECTED,
-    S2N_ERR_PQ_KEMS_DISALLOWED_IN_FIPS,
     S2N_ERR_MAX_INNER_PLAINTEXT_SIZE,
     S2N_ERR_RECORD_STUFFER_SIZE,
     S2N_ERR_FRAGMENT_LENGTH_TOO_LARGE,
@@ -120,6 +120,7 @@ typedef enum {
     S2N_ERR_MISSING_EXTENSION,
     S2N_ERR_UNSUPPORTED_EXTENSION,
     S2N_ERR_DUPLICATE_EXTENSION,
+    S2N_ERR_MAX_EARLY_DATA_SIZE,
     S2N_ERR_T_PROTO_END,
 
     /* S2N_ERR_T_INTERNAL */
@@ -169,6 +170,7 @@ typedef enum {
     S2N_ERR_INITIAL_HMAC,
     S2N_ERR_INVALID_NONCE_TYPE,
     S2N_ERR_UNIMPLEMENTED,
+    S2N_ERR_HANDSHAKE_UNREACHABLE,
     S2N_ERR_READ,
     S2N_ERR_WRITE,
     S2N_ERR_BAD_FD,
@@ -191,16 +193,21 @@ typedef enum {
     S2N_ERR_ARRAY_INDEX_OOB,
     S2N_ERR_FREE_STATIC_BLOB,
     S2N_ERR_RESIZE_STATIC_BLOB,
-    S2N_ERR_NO_AVAILABLE_BORINGSSL_API,
+    S2N_ERR_NO_SUPPORTED_LIBCRYPTO_API,
     S2N_ERR_RECORD_LENGTH_TOO_LARGE,
     S2N_ERR_SET_DUPLICATE_VALUE,
     S2N_ERR_INVALID_PARSED_EXTENSIONS,
     S2N_ERR_ASYNC_CALLBACK_FAILED,
     S2N_ERR_ASYNC_MORE_THAN_ONE,
+    S2N_ERR_PQ_CRYPTO,
+    S2N_ERR_PQ_DISABLED,
+    S2N_ERR_INVALID_CERT_STATE,
+    S2N_ERR_INVALID_EARLY_DATA_STATE,
     S2N_ERR_T_INTERNAL_END,
 
     /* S2N_ERR_T_USAGE */
     S2N_ERR_NO_ALERT = S2N_ERR_T_USAGE_START,
+    S2N_ERR_SERVER_MODE,
     S2N_ERR_CLIENT_MODE,
     S2N_ERR_CLIENT_MODE_DISABLED,
     S2N_ERR_TOO_MANY_CERTIFICATES,
@@ -218,7 +225,7 @@ typedef enum {
     S2N_ERR_NUM_DEFAULT_CERTIFICATES,
     S2N_ERR_MULTIPLE_DEFAULT_CERTIFICATES_PER_AUTH_TYPE,
     S2N_ERR_INVALID_CIPHER_PREFERENCES,
-    S2N_ERR_APPLICATION_PROTOCOL_TOO_LONG,
+    S2N_ERR_INVALID_APPLICATION_PROTOCOL,
     S2N_ERR_KEY_MISMATCH,
     S2N_ERR_SEND_SIZE,
     S2N_ERR_CORK_SET_ON_UNMANAGED,
@@ -257,6 +264,19 @@ typedef enum {
     S2N_ERR_ASYNC_WRONG_CONNECTION,
     S2N_ERR_ASYNC_APPLY_WHILE_INVOKING,
     S2N_ERR_ASYNC_ALREADY_APPLIED,
+    S2N_ERR_UNSUPPORTED_WITH_QUIC,
+    S2N_ERR_DUPLICATE_PSK_IDENTITIES,
+    S2N_ERR_OFFERED_PSKS_TOO_LONG,
+    S2N_ERR_INVALID_SESSION_TICKET,
+    S2N_ERR_REENTRANCY,
+    S2N_ERR_INVALID_STATE,
+    S2N_ERR_EARLY_DATA_NOT_ALLOWED,
+    S2N_ERR_NO_CERT_FOUND,
+    S2N_ERR_CERT_NOT_VALIDATED,
+    S2N_ERR_PSK_MODE,
+    S2N_ERR_X509_EXTENSION_VALUE_NOT_FOUND,
+    S2N_ERR_INVALID_X509_EXTENSION_TYPE,
+    S2N_ERR_INSUFFICIENT_MEM_SIZE,
     S2N_ERR_T_USAGE_END,
 } s2n_error;
 
@@ -273,10 +293,13 @@ extern __thread const char *s2n_debug_str;
 #define S2N_ERROR_PRESERVE_ERRNO() do { return -1; } while (0)
 #define S2N_ERROR_PTR( x )  do { _S2N_ERROR( ( x ) ); return NULL; } while (0)
 #define S2N_ERROR_IF( cond , x ) do { if ( cond ) { S2N_ERROR( x ); }} while (0)
-#define S2N_ERROR_IF_PTR( cond , x ) do { if ( cond ) { S2N_ERROR_PTR( x ); }} while (0)
 #define S2N_ERROR_IS_BLOCKING( x )    ( s2n_error_get_type(x) == S2N_ERR_T_BLOCKED )
 
 /**
+ * These macros should not be used in validate functions.
+ * All validate functions are also used in assumptions for CBMC proofs,
+ * which should not contain __CPROVER_*_ok primitives. The use of these primitives
+ * in assumptions may lead to spurious results.
  * Define function contracts.
  * When the code is being verified using CBMC these contracts are formally verified;
  * When the code is built in debug mode, they are checked as much as possible using assertions
@@ -284,18 +307,22 @@ extern __thread const char *s2n_debug_str;
  * Violations of the function contracts are undefined behaviour.
  */
 #ifdef CBMC
-#    define S2N_OBJECT_PTR_IS_READABLE(ptr) S2N_MEM_IS_READABLE((ptr), sizeof(*(ptr)))
-#    define S2N_OBJECT_PTR_IS_WRITABLE(ptr) S2N_MEM_IS_WRITABLE((ptr), sizeof(*(ptr)))
-#    define S2N_MEM_IS_READABLE(base, len) (((len) == 0) || __CPROVER_r_ok((base), (len)))
-#    define S2N_MEM_IS_WRITABLE(base, len) (((len) == 0) || __CPROVER_w_ok((base), (len)))
+#    define S2N_MEM_IS_READABLE_CHECK(base, len) (((len) == 0) || __CPROVER_r_ok((base), (len)))
+#    define S2N_MEM_IS_WRITABLE_CHECK(base, len) (((len) == 0) || __CPROVER_w_ok((base), (len)))
 #else
 /* the C runtime does not give a way to check these properties,
  * but we can at least check that the pointer is valid */
-#    define S2N_OBJECT_PTR_IS_READABLE(ptr) ((ptr) != NULL)
-#    define S2N_OBJECT_PTR_IS_WRITABLE(ptr) ((ptr) != NULL)
-#    define S2N_MEM_IS_READABLE(base, len) (((len) == 0) || (base) != NULL)
-#    define S2N_MEM_IS_WRITABLE(base, len) (((len) == 0) || (base) != NULL)
+#    define S2N_MEM_IS_READABLE_CHECK(base, len) (((len) == 0) || (base) != NULL)
+#    define S2N_MEM_IS_WRITABLE_CHECK(base, len) (((len) == 0) || (base) != NULL)
 #endif /* CBMC */
+
+/**
+ * These macros can safely be used in validate functions.
+ */
+#define S2N_MEM_IS_READABLE(base, len) (((len) == 0) || (base) != NULL)
+#define S2N_MEM_IS_WRITABLE(base, len) (((len) == 0) || (base) != NULL)
+#define S2N_OBJECT_PTR_IS_READABLE(ptr) ((ptr) != NULL)
+#define S2N_OBJECT_PTR_IS_WRITABLE(ptr) ((ptr) != NULL)
 
 #define S2N_IMPLIES(a, b) (!(a) || (b))
 /**

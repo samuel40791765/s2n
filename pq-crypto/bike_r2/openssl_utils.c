@@ -34,11 +34,10 @@ _INLINE_ void
 reverse_endian(OUT uint8_t *res, IN const uint8_t *in, IN const uint32_t n)
 {
   uint32_t i;
-  uint64_t tmp;
 
   for(i = 0; i < (n / 2); i++)
   {
-    tmp            = in[i];
+    uint64_t tmp            = in[i];
     res[i]         = in[n - 1 - i];
     res[n - 1 - i] = tmp;
   }
@@ -109,15 +108,15 @@ ossl_add(OUT uint8_t      res_bin[R_SIZE],
     BIKE_ERROR(EXTERNAL_LIB_ERROR_OPENSSL);
   }
 
-  GUARD(ossl_bin2bn(a, a_bin, R_SIZE));
-  GUARD(ossl_bin2bn(b, b_bin, R_SIZE));
+  POSIX_GUARD(ossl_bin2bn(a, a_bin, R_SIZE));
+  POSIX_GUARD(ossl_bin2bn(b, b_bin, R_SIZE));
 
   if(BN_GF2m_add(r, a, b) == 0)
   {
     BIKE_ERROR(EXTERNAL_LIB_ERROR_OPENSSL);
   }
 
-  GUARD(ossl_bn2bin(res_bin, r, R_SIZE));
+  POSIX_GUARD(ossl_bn2bin(res_bin, r, R_SIZE));
 
   return SUCCESS;
 }
@@ -177,10 +176,10 @@ cyclic_product(OUT uint8_t      res_bin[R_SIZE],
     BIKE_ERROR(EXTERNAL_LIB_ERROR_OPENSSL);
   }
 
-  GUARD(ossl_bin2bn(a, a_bin, R_SIZE));
-  GUARD(ossl_bin2bn(b, b_bin, R_SIZE));
-  GUARD(ossl_cyclic_product(r, a, b, bn_ctx));
-  GUARD(ossl_bn2bin(res_bin, r, R_SIZE));
+  POSIX_GUARD(ossl_bin2bn(a, a_bin, R_SIZE));
+  POSIX_GUARD(ossl_bin2bn(b, b_bin, R_SIZE));
+  POSIX_GUARD(ossl_cyclic_product(r, a, b, bn_ctx));
+  POSIX_GUARD(ossl_bn2bin(res_bin, r, R_SIZE));
 
   return SUCCESS;
 }

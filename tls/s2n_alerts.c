@@ -56,10 +56,34 @@
 #define S2N_TLS_ALERT_LEVEL_WARNING         1
 #define S2N_TLS_ALERT_LEVEL_FATAL           2
 
+static bool s2n_alerts_supported(struct s2n_connection *conn)
+{
+    /* If running in QUIC mode, QUIC handles alerting.
+     * S2N should not send or receive alerts. */
+    return conn && conn->config && !conn->config->quic_enabled;
+}
+
+static bool s2n_handle_as_warning(struct s2n_connection *conn, uint8_t level, uint8_t type)
+{
+    /* Only TLS1.2 considers the alert level. The alert level field is
+     * considered deprecated in TLS1.3. */
+    if (s2n_connection_get_protocol_version(conn) < S2N_TLS13) {
+        return level == S2N_TLS_ALERT_LEVEL_WARNING
+                && conn->config->alert_behavior == S2N_ALERT_IGNORE_WARNINGS;
+    }
+
+    /* user_canceled is the only alert currently treated as a warning in TLS1.3.
+     * We need to treat it as a warning regardless of alert_behavior to avoid marking
+     * correctly-closed connections as failed. */
+    return type == S2N_TLS_ALERT_USER_CANCELED;
+}
+
 int s2n_process_alert_fragment(struct s2n_connection *conn)
 {
+    POSIX_ENSURE_REF(conn);
     S2N_ERROR_IF(s2n_stuffer_data_available(&conn->in) == 0, S2N_ERR_BAD_MESSAGE);
     S2N_ERROR_IF(s2n_stuffer_data_available(&conn->alert_in) == 2, S2N_ERR_ALERT_PRESENT);
+    POSIX_ENSURE(s2n_alerts_supported(conn), S2N_ERR_BAD_MESSAGE);
 
     while (s2n_stuffer_data_available(&conn->in)) {
         uint8_t bytes_required = 2;
@@ -71,19 +95,20 @@ int s2n_process_alert_fragment(struct s2n_connection *conn)
 
         int bytes_to_read = MIN(bytes_required, s2n_stuffer_data_available(&conn->in));
 
-        GUARD(s2n_stuffer_copy(&conn->in, &conn->alert_in, bytes_to_read));
+        POSIX_GUARD(s2n_stuffer_copy(&conn->in, &conn->alert_in, bytes_to_read));
 
         if (s2n_stuffer_data_available(&conn->alert_in) == 2) {
 
             /* Close notifications are handled as shutdowns */
             if (conn->alert_in_data[1] == S2N_TLS_ALERT_CLOSE_NOTIFY) {
                 conn->closed = 1;
+                conn->close_notify_received = true;
                 return 0;
             }
 
             /* Ignore warning-level alerts if we're in warning-tolerant mode */
-            if (conn->config->alert_behavior == S2N_ALERT_IGNORE_WARNINGS &&
-                    conn->alert_in_data[0] == S2N_TLS_ALERT_LEVEL_WARNING) {
+            if (s2n_handle_as_warning(conn, conn->alert_in_data[0], conn->alert_in_data[1])) {
+                POSIX_GUARD(s2n_stuffer_wipe(&conn->alert_in));
                 return 0;
             }
 
@@ -94,7 +119,7 @@ int s2n_process_alert_fragment(struct s2n_connection *conn)
 
             /* All other alerts are treated as fatal errors */
             conn->closed = 1;
-            S2N_ERROR(S2N_ERR_ALERT);
+            POSIX_BAIL(S2N_ERR_ALERT);
         }
     }
 
@@ -103,6 +128,8 @@ int s2n_process_alert_fragment(struct s2n_connection *conn)
 
 int s2n_queue_writer_close_alert_warning(struct s2n_connection *conn)
 {
+    POSIX_ENSURE_REF(conn);
+
     uint8_t alert[2];
     alert[0] = S2N_TLS_ALERT_LEVEL_WARNING;
     alert[1] = S2N_TLS_ALERT_CLOSE_NOTIFY;
@@ -111,17 +138,23 @@ int s2n_queue_writer_close_alert_warning(struct s2n_connection *conn)
 
     /* If there is an alert pending or we've already sent a close_notify, do nothing */
     if (s2n_stuffer_data_available(&conn->writer_alert_out) || conn->close_notify_queued) {
-        return 0;
+        return S2N_SUCCESS;
     }
 
-    GUARD(s2n_stuffer_write(&conn->writer_alert_out, &out));
+    if (!s2n_alerts_supported(conn)) {
+        return S2N_SUCCESS;
+    }
+
+    POSIX_GUARD(s2n_stuffer_write(&conn->writer_alert_out, &out));
     conn->close_notify_queued = 1;
 
-    return 0;
+    return S2N_SUCCESS;
 }
 
 static int s2n_queue_reader_alert(struct s2n_connection *conn, uint8_t level, uint8_t error_code)
 {
+    POSIX_ENSURE_REF(conn);
+
     uint8_t alert[2];
     alert[0] = level;
     alert[1] = error_code;
@@ -130,12 +163,16 @@ static int s2n_queue_reader_alert(struct s2n_connection *conn, uint8_t level, ui
 
     /* If there is an alert pending, do nothing */
     if (s2n_stuffer_data_available(&conn->reader_alert_out)) {
-        return 0;
+        return S2N_SUCCESS;
     }
 
-    GUARD(s2n_stuffer_write(&conn->reader_alert_out, &out));
+    if (!s2n_alerts_supported(conn)) {
+        return S2N_SUCCESS;
+    }
 
-    return 0;
+    POSIX_GUARD(s2n_stuffer_write(&conn->reader_alert_out, &out));
+
+    return S2N_SUCCESS;
 }
 
 int s2n_queue_reader_unsupported_protocol_version_alert(struct s2n_connection *conn)

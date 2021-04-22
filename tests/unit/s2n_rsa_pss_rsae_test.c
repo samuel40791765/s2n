@@ -111,6 +111,7 @@ const char* key_param_d = "383a6f19e1ea27fd08c7fbc3bfa684bd6329888c0bbe4c98625e"
 int main(int argc, char **argv)
 {
     BEGIN_TEST();
+    EXPECT_SUCCESS(s2n_disable_tls13());
 
     /* Load the RSA cert */
     struct s2n_cert_chain_and_key *rsa_cert_chain;
@@ -244,7 +245,6 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(RSA_set0_key(rsa_key, n, e, d));
 
         struct s2n_stuffer message_stuffer, signature_stuffer;
-        struct s2n_stuffer input_stuffer;
 
         for (int i = 0; i < sizeof(test_cases) / sizeof(struct test_case); i++) {
             s2n_stuffer_alloc_ro_from_hex_string(&message_stuffer, test_cases[i].message);
@@ -256,7 +256,6 @@ int main(int argc, char **argv)
 
             s2n_stuffer_free(&message_stuffer);
             s2n_stuffer_free(&signature_stuffer);
-            s2n_stuffer_free(&input_stuffer);
         }
 
         EXPECT_SUCCESS(s2n_pkey_free(&rsa_public_key));

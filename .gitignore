@@ -26,10 +26,10 @@ util-linux-*
 Python-*
 clang-*
 fuzz_dependencies/*
-.travis/prlimit
-.travis/.libs/*
 .vscode/
 test-deps/*
 .idea/*
 CMakeCache.txt
 CMakeFiles/*
+.project
+./codebuild/spec/buildspec_*_batch.yml

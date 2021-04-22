@@ -16,6 +16,10 @@
 import collections
 from enum import Enum
 
+# Number of lines of output to stdout s2nc or s2nd are expected
+# to produce after a successful handshake
+NUM_EXPECTED_LINES_OUTPUT = 11
+
 class OCSP(Enum):
     ENABLED = 1
     DISABLED = 2
@@ -27,13 +31,15 @@ S2N_TLS11 = 32
 S2N_TLS12 = 33
 S2N_TLS13 = 34
 
+ACTUAL_VERSION_STR = "Actual protocol version: {}"
+
 # namedtuple makes iterating through ciphers across client libraries easier. The openssl_1_1_1_compatible flag is for
 # s_client tests. s_client won't be able to use those ciphers.
 S2N_CIPHER = collections.namedtuple('S2N_CIPHER', 'openssl_name gnutls_priority_str min_tls_vers openssl_1_1_1_compatible openssl_fips_compatible')
 
 # Specifying a single cipher suite in GnuTLS requires specifying a "priority string" that removes all cipher suites,
 # and then adds each algorithm(kx,auth,enc,mac) for a given suite. See https://www.gnutls.org/manual/html_node/Priority-Strings.html
-S2N_GNUTLS_PRIORITY_PREFIX="NONE:+COMP-NULL:+CTYPE-ALL:+CURVE-ALL"
+S2N_GNUTLS_PRIORITY_PREFIX="NONE:+COMP-NULL:+CTYPE-ALL"
 
 ALL_TEST_CIPHERS = [
     S2N_CIPHER("RC4-MD5", S2N_GNUTLS_PRIORITY_PREFIX + ":+RSA:+ARCFOUR-128:+MD5", S2N_SSLv3, False, False),
@@ -75,7 +81,7 @@ ALL_TEST_CIPHERS = [
 MAX_ITERATION_DEPTH = 3
 
 # Expected preferences for SignatureAlgorithms in GnuTLS priority string format
-# See https://github.com/awslabs/s2n/blob/master/tls/s2n_tls_digest_preferences.h
+# See https://github.com/awslabs/s2n/blob/main/tls/s2n_tls_digest_preferences.h
 EXPECTED_RSA_SIGNATURE_ALGORITHM_PREFS = [
     "SIGN-RSA-SHA256",
     "SIGN-RSA-SHA384",
@@ -102,10 +108,15 @@ OPENSSL_1_0_2_TEST_CIPHERS = list(filter(lambda x: "CHACHA20" not in x.openssl_n
 # Test ciphers to use when s2n is built with Openssl 1.0.2 libcrypto that is linked with a FIPS module.
 OPENSSL_1_0_2_FIPS_TEST_CIPHERS = list(filter(lambda x: x.openssl_fips_compatible == True, ALL_TEST_CIPHERS))
 
-# Test ciphers to use when s2n is built with LibreSSL or BoringSSL libcrypto. s2n does not implement the
-# ChaCha20-Poly1305 cipher offered by these libcryptos.
+# Test ciphers to use when s2n is built with BoringSSL. All ciphers should be avilable.
+BORINGSSL_TEST_CIPHERS = ALL_TEST_CIPHERS
+
+# Test ciphers to use when s2n is built with AWS-LC. All ciphers should be avilable.
+AWSLC_TEST_CIPHERS = ALL_TEST_CIPHERS
+
+# Test ciphers to use when s2n is built with LibreSSL. LibreSSL does not have the
+# ChaCha20-Poly1305 cipher.
 LIBRESSL_TEST_CIPHERS = list(filter(lambda x: "CHACHA20" not in x.openssl_name, ALL_TEST_CIPHERS))
-BORINGSSL_TEST_CIPHERS = list(filter(lambda x: "CHACHA20" not in x.openssl_name, ALL_TEST_CIPHERS))
 
 # Dictionary to look up ciphers to use by libcrypto s2n is built with.
 # Libcrypto string will be an argument to test scripts.
@@ -115,6 +126,7 @@ S2N_LIBCRYPTO_TO_TEST_CIPHERS = {
     "openssl-1.0.2-fips"    : OPENSSL_1_0_2_FIPS_TEST_CIPHERS,
     "libressl"              : LIBRESSL_TEST_CIPHERS,
     "boringssl"             : BORINGSSL_TEST_CIPHERS,
+    "awslc"                 : AWSLC_TEST_CIPHERS,
 }
 
 S2N_LIBCRYPTO_TO_OCSP = {
@@ -123,9 +135,10 @@ S2N_LIBCRYPTO_TO_OCSP = {
     "openssl-1.0.2-fips"    : [OCSP.ENABLED, OCSP.DISABLED, OCSP.MALFORMED],
     "libressl"              : [OCSP.ENABLED, OCSP.DISABLED, OCSP.MALFORMED],
     "boringssl"             : [OCSP.DISABLED],
+    "awslc"                 : [OCSP.DISABLED],
 }
 
-S2N_LIBCRYPTO_CHOICES = ['openssl-1.0.2', 'openssl-1.0.2-fips', 'openssl-1.1.1', 'libressl', 'boringssl']
+S2N_LIBCRYPTO_CHOICES = ['openssl-1.0.2', 'openssl-1.0.2-fips', 'openssl-1.1.1', 'libressl', 'boringssl', 'awslc']
 
 S2N_PROTO_VERS_TO_STR = {
     S2N_SSLv3 : "SSLv3",
