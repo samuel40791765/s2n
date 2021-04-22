@@ -22,6 +22,7 @@
 #include "tls/extensions/s2n_extension_list.h"
 #include "tls/s2n_config.h"
 #include "tls/s2n_connection.h"
+#include "extensions/s2n_ocsp.h"
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -30,7 +31,7 @@
 #include <openssl/asn1.h>
 #include <openssl/x509.h>
 
-#include "s2n-ocsp.h"
+
 // =======
 // #if !defined(OPENSSL_IS_BORINGSSL) && !defined(OPENSSL_IS_AWSLC)
 // #include <openssl/ocsp.h>
@@ -167,9 +168,9 @@ int s2n_x509_validator_init(struct s2n_x509_validator *validator, struct s2n_x50
 }
 
 static inline void wipe_cert_chain(STACK_OF(X509) *cert_chain) {
-    if (cert_chain) {
-        sk_X509_pop_free(cert_chain, X509_free);
-    }
+if (cert_chain) {
+sk_X509_pop_free(cert_chain, X509_free);
+}
 }
 
 void s2n_x509_validator_wipe(struct s2n_x509_validator *validator) {
@@ -236,9 +237,9 @@ static uint8_t s2n_verify_host_information(struct s2n_x509_validator *validator,
             /* strlen should be safe here since we made sure we were null terminated AND that inet_ntop succeeded */
             if (s2n_result_is_ok(parse_result)) {
                 verified = conn->verify_host_fn(
-                               (const char *)address.data,
-                               strlen((const char *)address.data),
-                               conn->data_for_verify_host);
+                    (const char *)address.data,
+                    strlen((const char *)address.data),
+                    conn->data_for_verify_host);
             }
         }
     }
@@ -256,7 +257,7 @@ static uint8_t s2n_verify_host_information(struct s2n_x509_validator *validator,
 
             if (curr_idx >= 0) {
                 ASN1_STRING *common_name =
-                        X509_NAME_ENTRY_get_data(X509_NAME_get_entry(subject_name, curr_idx));
+                    X509_NAME_ENTRY_get_data(X509_NAME_get_entry(subject_name, curr_idx));
 
                 if (common_name) {
                     char peer_cn[255];
@@ -285,7 +286,7 @@ static uint8_t s2n_verify_host_information(struct s2n_x509_validator *validator,
 }
 
 s2n_cert_validation_code s2n_x509_validator_validate_cert_chain(struct s2n_x509_validator *validator, struct s2n_connection *conn,
-        uint8_t *cert_chain_in, uint32_t cert_chain_len, s2n_pkey_type *pkey_type, struct s2n_pkey *public_key_out) {
+                                                                uint8_t *cert_chain_in, uint32_t cert_chain_len, s2n_pkey_type *pkey_type, struct s2n_pkey *public_key_out) {
     S2N_ERROR_IF(!validator->skip_cert_validation && !s2n_x509_trust_store_has_certs(validator->trust_store), S2N_ERR_CERT_UNTRUSTED);
     S2N_ERROR_IF(validator->state != INIT, S2N_ERR_INVALID_CERT_STATE);
 
@@ -339,7 +340,7 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_chain(struct s2n_x509_
             s2n_parsed_extensions_list parsed_extensions_list = { 0 };
             POSIX_GUARD(s2n_extension_list_parse(&cert_chain_in_stuffer, &parsed_extensions_list));
 
-            /* RFC 8446: if an extension applies to the entire chain, it SHOULD be included in the first CertificateEntry */      
+            /* RFC 8446: if an extension applies to the entire chain, it SHOULD be included in the first CertificateEntry */
             if (sk_X509_num(validator->cert_chain_from_wire) == 1) {
                 first_certificate_extensions = parsed_extensions_list;
             }
@@ -387,7 +388,7 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_chain(struct s2n_x509_
 }
 
 s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(struct s2n_x509_validator *validator,
-        struct s2n_connection *conn, const uint8_t *ocsp_response_raw, uint32_t ocsp_response_length) {
+                                                                                struct s2n_connection *conn, const uint8_t *ocsp_response_raw, uint32_t ocsp_response_length) {
 
     if (validator->skip_cert_validation || !validator->check_stapled_ocsp) {
         validator->state = OCSP_VALIDATED;
@@ -501,6 +502,7 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(
 
     /* Important: this checks that the stapled ocsp response CAN be verified, not that it has been verified. */
     const int ocsp_verify_err = OCSP_basic_verify(basic_response, cert_chain, validator->trust_store->trust_store, 0);
+
     /* do the crypto checks on the response.*/
     if (ocsp_verify_err) {
         ret_val = S2N_CERT_ERR_UNTRUSTED;
@@ -629,19 +631,19 @@ S2N_RESULT s2n_validate_sig_scheme_supported(struct s2n_connection *conn, X509 *
 
     int nid = 0;
 
-    #if defined(LIBRESSL_VERSION_NUMBER) && (LIBRESSL_VERSION_NUMBER < 0x02070000f)
-        RESULT_ENSURE_REF(x509_cert->sig_alg);
+#if defined(LIBRESSL_VERSION_NUMBER) && (LIBRESSL_VERSION_NUMBER < 0x02070000f)
+    RESULT_ENSURE_REF(x509_cert->sig_alg);
         nid = OBJ_obj2nid(x509_cert->sig_alg->algorithm);
-    #else
-        nid = X509_get_signature_nid(x509_cert);
-    #endif
+#else
+    nid = X509_get_signature_nid(x509_cert);
+#endif
 
     for (size_t i = 0; i < cert_sig_preferences->count; i++) {
 
         if (cert_sig_preferences->signature_schemes[i]->libcrypto_nid == nid) {
             /* SHA-1 algorithms are not supported in certificate signatures in TLS1.3 */
             RESULT_ENSURE(!(conn->actual_protocol_version >= S2N_TLS13 &&
-                    cert_sig_preferences->signature_schemes[i]->hash_alg == S2N_HASH_SHA1), S2N_ERR_CERT_UNTRUSTED);
+                            cert_sig_preferences->signature_schemes[i]->hash_alg == S2N_HASH_SHA1), S2N_ERR_CERT_UNTRUSTED);
 
             return S2N_RESULT_OK;
         }
