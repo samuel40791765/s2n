@@ -29,8 +29,7 @@
 #include <openssl/err.h>
 #include <openssl/asn1.h>
 #include <openssl/x509.h>
-
-#include "s2n-ocsp.h"
+#include <openssl/ocsp.h>
 // =======
 // #if !defined(OPENSSL_IS_BORINGSSL) && !defined(OPENSSL_IS_AWSLC)
 // #include <openssl/ocsp.h>
@@ -501,6 +500,7 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(
 
     /* Important: this checks that the stapled ocsp response CAN be verified, not that it has been verified. */
     const int ocsp_verify_err = OCSP_basic_verify(basic_response, cert_chain, validator->trust_store->trust_store, 0);
+
     /* do the crypto checks on the response.*/
     if (ocsp_verify_err) {
         ret_val = S2N_CERT_ERR_UNTRUSTED;
