@@ -44,6 +44,12 @@ struct s2n_psk {
     uint64_t ticket_issue_time;
     struct s2n_blob early_secret;
     struct s2n_early_data_config early_data_config;
+
+    /* This field is used with session tickets to track the lifetime
+     * of the original full handshake across multiple tickets.
+     * See https://tools.ietf.org/rfc/rfc8446#section-4.6.1
+     */
+    uint64_t keying_material_expiration;
 };
 S2N_RESULT s2n_psk_init(struct s2n_psk *psk, s2n_psk_type type);
 S2N_CLEANUP_RESULT s2n_psk_wipe(struct s2n_psk *psk);
@@ -65,6 +71,7 @@ S2N_CLEANUP_RESULT s2n_psk_parameters_wipe_secrets(struct s2n_psk_parameters *pa
 struct s2n_offered_psk {
     struct s2n_blob identity;
     uint16_t wire_index;
+    uint32_t obfuscated_ticket_age;
 };
 
 struct s2n_offered_psk_list {
@@ -83,38 +90,4 @@ int s2n_psk_verify_binder(struct s2n_connection *conn, struct s2n_psk *psk,
         const struct s2n_blob *partial_client_hello, struct s2n_blob *binder_to_verify);
 
 S2N_RESULT s2n_connection_set_psk_type(struct s2n_connection *conn, s2n_psk_type type);
-
-/* Public Interface -- will be made visible and moved to s2n.h when the PSK feature is released */
-
-typedef enum {
-    S2N_PSK_HMAC_SHA256,
-    S2N_PSK_HMAC_SHA384,
-} s2n_psk_hmac;
-
-struct s2n_psk;
-struct s2n_psk* s2n_external_psk_new();
-int s2n_psk_free(struct s2n_psk **psk);
-int s2n_psk_set_identity(struct s2n_psk *psk, const uint8_t *identity, uint16_t identity_size);
-int s2n_psk_set_secret(struct s2n_psk *psk, const uint8_t *secret, uint16_t secret_size);
-int s2n_psk_set_hmac(struct s2n_psk *psk, s2n_psk_hmac hmac);
-
-int s2n_connection_append_psk(struct s2n_connection *conn, struct s2n_psk *psk);
-
-typedef enum { S2N_PSK_MODE_RESUMPTION, S2N_PSK_MODE_EXTERNAL } s2n_psk_mode;
-int s2n_config_set_psk_mode(struct s2n_config *config, s2n_psk_mode mode);
-int s2n_connection_set_psk_mode(struct s2n_connection *conn, s2n_psk_mode mode);
-
-struct s2n_offered_psk;
-struct s2n_offered_psk* s2n_offered_psk_new();
-int s2n_offered_psk_free(struct s2n_offered_psk **psk);
-int s2n_offered_psk_get_identity(struct s2n_offered_psk *psk, uint8_t** identity, uint16_t *size);
-
-struct s2n_offered_psk_list;
-bool s2n_offered_psk_list_has_next(struct s2n_offered_psk_list *psk_list);
-int s2n_offered_psk_list_next(struct s2n_offered_psk_list *psk_list, struct s2n_offered_psk *psk);
-int s2n_offered_psk_list_reread(struct s2n_offered_psk_list *psk_list);
-int s2n_offered_psk_list_choose_psk(struct s2n_offered_psk_list *psk_list, struct s2n_offered_psk *psk);
-
-typedef int (*s2n_psk_selection_callback)(struct s2n_connection *conn, void *context,
-                                          struct s2n_offered_psk_list *psk_list);
-int s2n_config_set_psk_selection_callback(struct s2n_config *config, s2n_psk_selection_callback cb, void *context);
+S2N_RESULT s2n_psk_validate_keying_material(struct s2n_connection *conn);

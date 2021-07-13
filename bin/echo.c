@@ -31,6 +31,7 @@
 
 #include "crypto/s2n_rsa.h"
 #include "crypto/s2n_pkey.h"
+#include "common.h"
 
 #define STDIO_BUFSIZE  10240
 
@@ -65,6 +66,55 @@ static int wait_for_event(int fd, s2n_blocked_status blocked)
         fprintf(stderr, "Failed to poll connection: %s\n", strerror(errno));
         S2N_ERROR_PRESERVE_ERRNO();
     }
+
+    return S2N_SUCCESS;
+}
+
+int early_data_recv(struct s2n_connection *conn)
+{
+    uint32_t max_early_data_size = 0;
+    GUARD_RETURN(s2n_connection_get_max_early_data_size(conn, &max_early_data_size), "Error getting max early data size");
+    if (max_early_data_size == 0) {
+        return S2N_SUCCESS;
+    }
+
+    ssize_t total_data_recv = 0;
+    ssize_t data_recv = 0;
+    bool server_success = 0;
+    s2n_blocked_status blocked = 0;
+    uint8_t *early_data_received = malloc(max_early_data_size);
+    GUARD_EXIT_NULL(early_data_received);
+
+    do {
+        server_success = (s2n_recv_early_data(conn, early_data_received + total_data_recv,
+                max_early_data_size - total_data_recv, &data_recv, &blocked) >= S2N_SUCCESS);
+        total_data_recv += data_recv;
+    } while (!server_success);
+
+    if (total_data_recv > 0) {
+        fprintf(stdout, "Early Data received: ");
+        for (size_t i = 0; i < total_data_recv; i++) {
+            fprintf(stdout, "%c", early_data_received[i]);
+        }
+        fprintf(stdout, "\n");
+    }
+
+    free(early_data_received);
+
+    return S2N_SUCCESS;
+}
+
+int early_data_send(struct s2n_connection *conn, uint8_t *data, uint32_t len)
+{
+    s2n_blocked_status blocked = 0;
+    ssize_t total_data_sent = 0;
+    ssize_t data_sent = 0;
+    bool client_success = 0;
+    do {
+        client_success = (s2n_send_early_data(conn, data + total_data_sent,
+                len - total_data_sent, &data_sent, &blocked) >= S2N_SUCCESS);
+        total_data_sent += data_sent;
+    } while (total_data_sent < len && !client_success);
 
     return S2N_SUCCESS;
 }
@@ -110,6 +160,7 @@ int negotiate(struct s2n_connection *conn, int fd)
         POSIX_BAIL(S2N_ERR_ACTUAL_PROTOCOL_VERSION);
     }
     printf("CONNECTED:\n");
+    printf("Handshake: %s\n", s2n_connection_get_handshake_type_name(conn));
     printf("Client hello version: %d\n", client_hello_version);
     printf("Client protocol version: %d\n", client_protocol_version);
     printf("Server protocol version: %d\n", server_protocol_version);
@@ -134,14 +185,39 @@ int negotiate(struct s2n_connection *conn, int fd)
     }
 
     printf("Cipher negotiated: %s\n", s2n_connection_get_cipher(conn));
-    if (s2n_connection_is_session_resumed(conn)) {
+
+    bool session_resumed = s2n_connection_is_session_resumed(conn);
+    if (session_resumed) {
         printf("Resumed session\n");
     }
 
+    uint16_t identity_length = 0;
+    GUARD_EXIT(s2n_connection_get_negotiated_psk_identity_length(conn, &identity_length), "Error getting negotiated psk identity length from the connection\n");
+    if (identity_length != 0 && !session_resumed) {
+        uint8_t *identity = malloc(identity_length);
+        GUARD_EXIT_NULL(identity);
+        GUARD_EXIT(s2n_connection_get_negotiated_psk_identity(conn, identity, identity_length), "Error getting negotiated psk identity from the connection\n");
+        printf("Negotiated PSK identity: %s\n", identity);
+        free(identity);
+    }
+
+    s2n_early_data_status_t early_data_status = 0;
+    GUARD_EXIT(s2n_connection_get_early_data_status(conn, &early_data_status), "Error getting early data status");
+    const char *status_str = NULL;
+    switch(early_data_status) {
+        case S2N_EARLY_DATA_STATUS_OK: status_str = "IN PROGRESS"; break;
+        case S2N_EARLY_DATA_STATUS_NOT_REQUESTED: status_str = "NOT REQUESTED"; break;
+        case S2N_EARLY_DATA_STATUS_REJECTED: status_str = "REJECTED"; break;
+        case S2N_EARLY_DATA_STATUS_END: status_str = "ACCEPTED"; break;
+    }
+    GUARD_EXIT_NULL(status_str);
+    printf("Early Data status: %s\n", status_str);
+
+    printf("s2n is ready\n");
     return 0;
 }
 
-int echo(struct s2n_connection *conn, int sockfd)
+int echo(struct s2n_connection *conn, int sockfd, bool *stop_echo)
 {
     struct pollfd readers[2];
 
@@ -154,10 +230,12 @@ int echo(struct s2n_connection *conn, int sockfd)
     errno = 0;
 
     /* Act as a simple proxy between stdin and the SSL connection */
-    int p;
+    int p = 0;
     s2n_blocked_status blocked;
     do {
-        while ((p = poll(readers, 2, -1)) > 0) {
+        /* echo will send and receive Application Data back and forth between
+         * client and server, until stop_echo is true. */
+        while (!(*stop_echo) && (p = poll(readers, 2, -1)) > 0) {
             char buffer[STDIO_BUFSIZE];
             ssize_t bytes_read = 0;
             ssize_t bytes_written = 0;

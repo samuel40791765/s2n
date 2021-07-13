@@ -485,8 +485,8 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_stuffer_write(&server_conn->handshake.io, &tls12_client_hello_no_curves));
         EXPECT_SUCCESS(s2n_client_hello_recv(server_conn));
 
-        /* ensure negotiated_curve == secp256r1 for maximum client compatability */
-        EXPECT_EQUAL(server_conn->secure.server_ecc_evp_params.negotiated_curve, &s2n_ecc_curve_secp256r1);
+        /* ensure negotiated_curve == secp256r1 for maximum client compatibility */
+        EXPECT_EQUAL(server_conn->kex_params.server_ecc_evp_params.negotiated_curve, &s2n_ecc_curve_secp256r1);
 
         EXPECT_EQUAL(server_conn->server_protocol_version, S2N_TLS13);
         EXPECT_EQUAL(server_conn->actual_protocol_version, S2N_TLS12);

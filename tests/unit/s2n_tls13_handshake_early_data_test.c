@@ -96,10 +96,10 @@ static S2N_RESULT s2n_setup_tls13_secrets_prereqs(struct s2n_connection *conn)
     RESULT_GUARD_POSIX(s2n_connection_get_ecc_preferences(conn, &ecc_pref));
     RESULT_ENSURE_REF(ecc_pref);
 
-    conn->secure.server_ecc_evp_params.negotiated_curve = ecc_pref->ecc_curves[0];
-    conn->secure.client_ecc_evp_params[0].negotiated_curve = ecc_pref->ecc_curves[0];
-    RESULT_GUARD_POSIX(s2n_ecc_evp_generate_ephemeral_key(&conn->secure.server_ecc_evp_params));
-    RESULT_GUARD_POSIX(s2n_ecc_evp_generate_ephemeral_key(&conn->secure.client_ecc_evp_params[0]));
+    conn->kex_params.server_ecc_evp_params.negotiated_curve = ecc_pref->ecc_curves[0];
+    conn->kex_params.client_ecc_evp_params[0].negotiated_curve = ecc_pref->ecc_curves[0];
+    RESULT_GUARD_POSIX(s2n_ecc_evp_generate_ephemeral_key(&conn->kex_params.server_ecc_evp_params));
+    RESULT_GUARD_POSIX(s2n_ecc_evp_generate_ephemeral_key(&conn->kex_params.client_ecc_evp_params[0]));
 
     uint8_t test_value[SHA256_DIGEST_LENGTH] = "test";
     DEFER_CLEANUP(struct s2n_psk *s2n_test_psk = s2n_external_psk_new(), s2n_psk_free);
@@ -586,6 +586,10 @@ int main()
             EXPECT_SUCCESS(s2n_psk_set_secret(psk, psk_secret.data, psk_secret.size));
             EXPECT_SUCCESS(s2n_psk_configure_early_data(psk, max_early_data, 0x13, 0x01));
             EXPECT_SUCCESS(s2n_connection_append_psk(server_conn, psk));
+            /* We need to explicitly set the psk_params type to skip our stateless session resumption recv 
+             * code because the handshake traces we're using are meant for stateful session resumption.
+             * TODO: https://github.com/aws/s2n-tls/issues/2742 */
+            server_conn->psk_params.type = S2N_PSK_TYPE_EXTERNAL;
 
             DEFER_CLEANUP(struct s2n_stuffer input = { 0 }, s2n_stuffer_free);
             DEFER_CLEANUP(struct s2n_stuffer output = { 0 }, s2n_stuffer_free);

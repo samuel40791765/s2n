@@ -53,10 +53,10 @@ static int s2n_setup_tls13_secrets_prereqs(struct s2n_connection *conn)
     POSIX_GUARD(s2n_connection_get_ecc_preferences(conn, &ecc_pref));
     POSIX_ENSURE_REF(ecc_pref);
 
-    conn->secure.server_ecc_evp_params.negotiated_curve = ecc_pref->ecc_curves[0];
-    conn->secure.client_ecc_evp_params[0].negotiated_curve = ecc_pref->ecc_curves[0];
-    POSIX_GUARD(s2n_ecc_evp_generate_ephemeral_key(&conn->secure.server_ecc_evp_params));
-    POSIX_GUARD(s2n_ecc_evp_generate_ephemeral_key(&conn->secure.client_ecc_evp_params[0]));
+    conn->kex_params.server_ecc_evp_params.negotiated_curve = ecc_pref->ecc_curves[0];
+    conn->kex_params.client_ecc_evp_params[0].negotiated_curve = ecc_pref->ecc_curves[0];
+    POSIX_GUARD(s2n_ecc_evp_generate_ephemeral_key(&conn->kex_params.server_ecc_evp_params));
+    POSIX_GUARD(s2n_ecc_evp_generate_ephemeral_key(&conn->kex_params.client_ecc_evp_params[0]));
 
     return S2N_SUCCESS;
 }
@@ -174,7 +174,7 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_extensions_client_key_share_recv(server_conn, &client_hello_key_share));
 
         /* Server configures the "negotiated_curve" */
-        server_conn->secure.server_ecc_evp_params.negotiated_curve = server_ecc_preferences->ecc_curves[0];
+        server_conn->kex_params.server_ecc_evp_params.negotiated_curve = server_ecc_preferences->ecc_curves[0];
 
         /* Server sends ServerHello key_share */
         EXPECT_SUCCESS(s2n_extensions_server_key_share_send(server_conn, &server_hello_key_share));
@@ -185,7 +185,7 @@ int main(int argc, char **argv)
         EXPECT_SUCCESS(s2n_extensions_server_key_share_recv(client_conn, &server_hello_key_share));
         EXPECT_EQUAL(s2n_stuffer_data_available(&server_hello_key_share), 0);
 
-        EXPECT_EQUAL(server_conn->secure.server_ecc_evp_params.negotiated_curve, client_conn->secure.server_ecc_evp_params.negotiated_curve);
+        EXPECT_EQUAL(server_conn->kex_params.server_ecc_evp_params.negotiated_curve, client_conn->kex_params.server_ecc_evp_params.negotiated_curve);
 
         client_conn->secure.cipher_suite = &s2n_tls13_aes_128_gcm_sha256;
         server_conn->secure.cipher_suite = &s2n_tls13_aes_128_gcm_sha256;
@@ -223,7 +223,7 @@ int main(int argc, char **argv)
         server_conn->server = &server_conn->initial;
         S2N_BLOB_FROM_HEX(deadbeef_from_server, "DEADBEEF");
 
-        EXPECT_SUCCESS(s2n_record_write(server_conn, TLS_APPLICATION_DATA, &deadbeef_from_server));
+        EXPECT_SUCCESS(s2n_record_write(server_conn, TLS_HANDSHAKE, &deadbeef_from_server));
         EXPECT_EQUAL(s2n_stuffer_data_available(&server_conn->out), 9);
         EXPECT_SUCCESS(s2n_stuffer_wipe(&server_conn->out));
 
@@ -245,7 +245,7 @@ int main(int argc, char **argv)
         /* client writes message to server in plaintext */
         client_conn->client = &client_conn->initial;
         S2N_BLOB_FROM_HEX(cafefood_from_client, "CAFED00D");
-        EXPECT_SUCCESS(s2n_record_write(client_conn, TLS_APPLICATION_DATA, &cafefood_from_client));
+        EXPECT_SUCCESS(s2n_record_write(client_conn, TLS_HANDSHAKE, &cafefood_from_client));
 
         /* unencrypted length */
         EXPECT_EQUAL(s2n_stuffer_data_available(&client_conn->out), 9);
@@ -255,16 +255,6 @@ int main(int argc, char **argv)
         client_conn->client = &client_conn->secure;
         EXPECT_SUCCESS(s2n_record_write(client_conn, TLS_APPLICATION_DATA, &cafefood_from_client));
         EXPECT_EQUAL(s2n_stuffer_data_available(&client_conn->out), 26);
-        EXPECT_SUCCESS(s2n_stuffer_copy(&client_conn->out, &server_conn->header_in, 5));
-        EXPECT_SUCCESS(s2n_stuffer_copy(&client_conn->out, &server_conn->in, s2n_stuffer_data_available(&client_conn->out)));
-
-        /* if aead payload is parsed as plaintext, it would be of length 21 */
-        server_conn->client = &server_conn->initial;
-        EXPECT_SUCCESS(s2n_record_parse(server_conn));
-        EXPECT_EQUAL(s2n_stuffer_data_available(&server_conn->in), 21);
-        EXPECT_SUCCESS(s2n_stuffer_reread(&client_conn->out));
-        EXPECT_SUCCESS(s2n_stuffer_wipe(&server_conn->header_in));
-        EXPECT_SUCCESS(s2n_stuffer_wipe(&server_conn->in));
         EXPECT_SUCCESS(s2n_stuffer_copy(&client_conn->out, &server_conn->header_in, 5));
         EXPECT_SUCCESS(s2n_stuffer_copy(&client_conn->out, &server_conn->in, s2n_stuffer_data_available(&client_conn->out)));
 
@@ -339,10 +329,10 @@ int main(int argc, char **argv)
             EXPECT_NOT_NULL(ecc_preferences);
 
             conn->secure.cipher_suite = &s2n_tls13_aes_128_gcm_sha256;
-            conn->secure.server_ecc_evp_params.negotiated_curve = ecc_preferences->ecc_curves[0];
-            EXPECT_SUCCESS(s2n_ecc_evp_generate_ephemeral_key(&conn->secure.server_ecc_evp_params));
-            conn->secure.client_ecc_evp_params[0].negotiated_curve = ecc_preferences->ecc_curves[0];
-            EXPECT_SUCCESS(s2n_ecc_evp_generate_ephemeral_key(&conn->secure.client_ecc_evp_params[0]));
+            conn->kex_params.server_ecc_evp_params.negotiated_curve = ecc_preferences->ecc_curves[0];
+            EXPECT_SUCCESS(s2n_ecc_evp_generate_ephemeral_key(&conn->kex_params.server_ecc_evp_params));
+            conn->kex_params.client_ecc_evp_params[0].negotiated_curve = ecc_preferences->ecc_curves[0];
+            EXPECT_SUCCESS(s2n_ecc_evp_generate_ephemeral_key(&conn->kex_params.client_ecc_evp_params[0]));
 
             const uint8_t psk_data[] = "test identity data";
             const uint8_t secret_data[] = "test secret data";
@@ -386,10 +376,10 @@ int main(int argc, char **argv)
             EXPECT_NOT_NULL(ecc_preferences);
 
             conn->secure.cipher_suite = &s2n_tls13_aes_128_gcm_sha256;
-            conn->secure.server_ecc_evp_params.negotiated_curve = ecc_preferences->ecc_curves[0];
-            EXPECT_SUCCESS(s2n_ecc_evp_generate_ephemeral_key(&conn->secure.server_ecc_evp_params));
-            conn->secure.client_ecc_evp_params[0].negotiated_curve = ecc_preferences->ecc_curves[0];
-            EXPECT_SUCCESS(s2n_ecc_evp_generate_ephemeral_key(&conn->secure.client_ecc_evp_params[0]));
+            conn->kex_params.server_ecc_evp_params.negotiated_curve = ecc_preferences->ecc_curves[0];
+            EXPECT_SUCCESS(s2n_ecc_evp_generate_ephemeral_key(&conn->kex_params.server_ecc_evp_params));
+            conn->kex_params.client_ecc_evp_params[0].negotiated_curve = ecc_preferences->ecc_curves[0];
+            EXPECT_SUCCESS(s2n_ecc_evp_generate_ephemeral_key(&conn->kex_params.client_ecc_evp_params[0]));
 
             const uint8_t psk_data[] = "test identity data";
             const uint8_t secret_data[] = "test secret data";
@@ -539,17 +529,20 @@ int main(int argc, char **argv)
         EXPECT_NOT_NULL(client_config = s2n_config_new());
         EXPECT_SUCCESS(s2n_config_set_unsafe_for_testing(client_config));
 
-        char *cert_chain = NULL;
-        char *private_key = NULL;
+        uint8_t *cert_chain = NULL;
+        uint8_t *private_key = NULL;
+        uint32_t cert_chain_len = 0;
+        uint32_t private_key_len = 0;
+
         EXPECT_NOT_NULL(cert_chain = malloc(S2N_MAX_TEST_PEM_SIZE));
         EXPECT_NOT_NULL(private_key = malloc(S2N_MAX_TEST_PEM_SIZE));
 
-        EXPECT_SUCCESS(s2n_read_test_pem(S2N_ECDSA_P384_PKCS1_CERT_CHAIN, cert_chain, S2N_MAX_TEST_PEM_SIZE));
-        EXPECT_SUCCESS(s2n_read_test_pem(S2N_ECDSA_P384_PKCS1_KEY, private_key, S2N_MAX_TEST_PEM_SIZE));
+        EXPECT_SUCCESS(s2n_read_test_pem_and_len(S2N_ECDSA_P384_PKCS1_CERT_CHAIN, cert_chain, &cert_chain_len, S2N_MAX_TEST_PEM_SIZE));
+        EXPECT_SUCCESS(s2n_read_test_pem_and_len(S2N_ECDSA_P384_PKCS1_KEY, private_key, &private_key_len, S2N_MAX_TEST_PEM_SIZE));
 
         struct s2n_cert_chain_and_key *default_cert;
         EXPECT_NOT_NULL(default_cert = s2n_cert_chain_and_key_new());
-        EXPECT_SUCCESS(s2n_cert_chain_and_key_load_pem(default_cert, cert_chain, private_key));
+        EXPECT_SUCCESS(s2n_cert_chain_and_key_load_pem_bytes(default_cert, cert_chain, cert_chain_len, private_key, private_key_len));
         EXPECT_SUCCESS(s2n_config_add_cert_chain_and_key_to_store(server_config, default_cert));
 
         EXPECT_NOT_NULL(client_conn = s2n_connection_new(S2N_CLIENT));

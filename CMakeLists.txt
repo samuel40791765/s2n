@@ -1,6 +1,10 @@
 cmake_minimum_required (VERSION 3.0)
 project (s2n C)
 
+if(POLICY CMP0077)
+    cmake_policy(SET CMP0077 NEW) #option does nothing when a normal variable of the same name exists.
+endif()
+
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -12,6 +16,11 @@ option(S2N_NO_PQ "Disables all Post Quantum Crypto code. You likely want this
 for older compilers or uncommon platforms." OFF)
 option(S2N_NO_PQ_ASM "Turns off the ASM for PQ Crypto even if it's available for the toolchain.
 You likely want this on older compilers." OFF)
+option(SEARCH_LIBCRYPTO "Set this if you want to let S2N search libcrypto for you,
+otherwise a crypto target needs to be defined." ON)
+option(UNSAFE_TREAT_WARNINGS_AS_ERRORS "Compiler warnings are treated as errors. Warnings may
+indicate danger points where you should verify with the S2N-TLS developers that the security of
+the library is not compromised. Turn this OFF to ignore warnings." ON)
 # Turn BUILD_TESTING=ON by default
 include(CTest)
 
@@ -48,11 +57,13 @@ else()
         "pq-crypto/bike_r2/*.h"
         "pq-crypto/bike_r3/*.h"
         "pq-crypto/sike_r1/*.h"
-        "pq-crypto/sike_r2/*.h"
         "pq-crypto/kyber_r2/*.h"
-        "pq-crypto/kyber_90s_r2/*.h")
+        "pq-crypto/kyber_90s_r2/*.h"
+        "pq-crypto/kyber_r3/*.h"
+        "pq-crypto/sike_r3/*.h")
 
-    # The SIKE code #includes .c files directly, including all sike_r*/*.c breaks the build due to duplicates
+    # The SIKE r1 code #includes .c files directly; including sike_r1/*.c
+    # here breaks the build due to duplicates. The SIKE r3 code does not have this issue.
     file(GLOB PQ_SRC
         "pq-crypto/*.c"
         "pq-crypto/bike_r1/*.c"
@@ -62,10 +73,10 @@ else()
         "pq-crypto/sike_r1/P503_r1.c"
         "pq-crypto/sike_r1/sike_r1_kem.c"
         "pq-crypto/sike_r1/fips202_r1.c"
-        "pq-crypto/sike_r2/fips202.c"
-        "pq-crypto/sike_r2/P434.c"
         "pq-crypto/kyber_r2/*.c"
-        "pq-crypto/kyber_90s_r2/*.c")
+        "pq-crypto/kyber_90s_r2/*.c"
+        "pq-crypto/kyber_r3/*.c"
+        "pq-crypto/sike_r3/*.c")
 endif()
 
 ##be nice to visual studio users
@@ -92,7 +103,7 @@ endif()
 # The PQ ASM try_compile has to come after we turn on pthread.
 # If S2N_NO_PQ_ASM is defined, all PQ assembly options will
 # remain turned off by default.
-set(SIKEP434R2_ASM_SUPPORTED false)
+set(SIKEP434R3_ASM_SUPPORTED false)
 set(ADX_SUPPORTED false)
 
 if(S2N_NO_PQ_ASM)
@@ -100,30 +111,68 @@ if(S2N_NO_PQ_ASM)
 else()
     enable_language(ASM)
 
-    # s2n_pq_asm_noop_test.c is just an empty main() function; the
-    # try_compile function in older versions of CMake requires a main()
+    # sikep434r3
     try_compile(
-        SIKEP434R2_ASM_SUPPORTED
-        ${CMAKE_BINARY_DIR}
-        SOURCES
-            "${CMAKE_CURRENT_LIST_DIR}/tests/unit/s2n_pq_asm_noop_test.c"
-            "${CMAKE_CURRENT_LIST_DIR}/pq-crypto/sike_r2/sikep434r2_fp_x64_asm.S"
+            SIKEP434R3_ASM_SUPPORTED
+            ${CMAKE_BINARY_DIR}
+            SOURCES
+            "${CMAKE_CURRENT_LIST_DIR}/tests/features/noop_main.c"
+            "${CMAKE_CURRENT_LIST_DIR}/pq-crypto/sike_r3/sikep434r3.c"
+            "${CMAKE_CURRENT_LIST_DIR}/pq-crypto/sike_r3/sikep434r3_fp_x64_asm.S"
     )
 
-    if(SIKEP434R2_ASM_SUPPORTED)
-        file(GLOB SIKEP434R2_ASM_SRC "pq-crypto/sike_r2/sikep434r2_fp_x64_asm.S")
-        list(APPEND PQ_SRC ${SIKEP434R2_ASM_SRC})
+    if(SIKEP434R3_ASM_SUPPORTED)
+        file(GLOB SIKEP434R3_ASM_SRC "pq-crypto/sike_r3/sikep434r3_fp_x64_asm.S")
+        list(APPEND PQ_SRC ${SIKEP434R3_ASM_SRC})
 
         # The ADX instruction set is preferred for best performance, but not necessary.
         try_compile(
-            ADX_SUPPORTED
-            ${CMAKE_BINARY_DIR}
-            SOURCES
-                "${CMAKE_CURRENT_LIST_DIR}/tests/unit/s2n_pq_asm_noop_test.c"
-                "${CMAKE_CURRENT_LIST_DIR}/pq-crypto/sike_r2/sikep434r2_fp_x64_asm.S"
-            COMPILE_DEFINITIONS
+                ADX_SUPPORTED
+                ${CMAKE_BINARY_DIR}
+                SOURCES
+                "${CMAKE_CURRENT_LIST_DIR}/tests/features/noop_main.c"
+                "${CMAKE_CURRENT_LIST_DIR}/pq-crypto/sike_r3/sikep434r3.c"
+                "${CMAKE_CURRENT_LIST_DIR}/pq-crypto/sike_r3/sikep434r3_fp_x64_asm.S"
+                COMPILE_DEFINITIONS
                 "-DS2N_ADX"
         )
+    endif()
+
+    # BIKE Round-3 code has several different optimizations which require
+    # specific compiler flags to be supported by the compiler.
+    # So for each needed instruction set extension we check if the compiler
+    # supports it and set proper compiler flags to be added later to the
+    # BIKE compilation units.
+    if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "^(x86_64|amd64|AMD64)$")
+        # First, check if the compiler supports the specific instruction set
+        # extensions. For example, gcc-4 doesn't fully support AVX-512, while
+        # gcc-7 doesn't support VPCLMUL extension.
+        try_compile(BIKE_R3_AVX2_SUPPORTED
+            ${CMAKE_BINARY_DIR}
+            "${CMAKE_CURRENT_LIST_DIR}/tests/features/noop_main.c"
+            COMPILE_DEFINITIONS "-mavx2")
+
+        set(BIKE_R3_AVX512_FLAGS "-mavx512f -mavx512bw -mavx512dq")
+        try_compile(BIKE_R3_AVX512_SUPPORTED
+            ${CMAKE_BINARY_DIR}
+            "${CMAKE_CURRENT_LIST_DIR}/tests/features/noop_main.c"
+            COMPILE_DEFINITIONS ${BIKE_R3_AVX512_FLAGS})
+
+        set(BIKE_R3_PCLMUL_FLAGS "-mpclmul -msse2")
+        try_compile(BIKE_R3_PCLMUL_SUPPORTED
+            ${CMAKE_BINARY_DIR}
+            "${CMAKE_CURRENT_LIST_DIR}/tests/features/noop_main.c"
+            COMPILE_DEFINITIONS ${BIKE_R3_PCLMUL_FLAGS})
+
+        set(BIKE_R3_VPCLMUL_FLAGS "-mvpclmulqdq -mavx512f -mavx512bw -mavx512dq")
+        try_compile(BIKE_R3_VPCLMUL_SUPPORTED
+            ${CMAKE_BINARY_DIR}
+            "${CMAKE_CURRENT_LIST_DIR}/tests/features/noop_main.c"
+            COMPILE_DEFINITIONS ${BIKE_R3_VPCLMUL_FLAGS})
+
+        if(BIKE_R3_AVX2_SUPPORTED OR BIKE_R3_AVX512_SUPPORTED OR BIKE_R3_PCLMUL_SUPPORTED OR BIKE_R3_VPCLMUL_SUPPORTED)
+            set(BIKE_R3_X86_64_OPT_SUPPORTED ON)
+        endif()
     endif()
 endif()
 
@@ -196,10 +245,14 @@ set_target_properties(${PROJECT_NAME} PROPERTIES LINKER_LANGUAGE C)
 
 set(CMAKE_C_FLAGS_DEBUGOPT "")
 
-target_compile_options(${PROJECT_NAME} PRIVATE -pedantic -std=gnu99 -Wall -Werror -Wimplicit -Wunused -Wcomment -Wchar-subscripts
+target_compile_options(${PROJECT_NAME} PRIVATE -pedantic -std=gnu99 -Wall -Wimplicit -Wunused -Wcomment -Wchar-subscripts
         -Wuninitialized -Wshadow -Wcast-qual -Wcast-align -Wwrite-strings -Wno-deprecated-declarations -Wno-unknown-pragmas -Wformat-security
         -Wno-missing-braces -Wa,--noexecstack
 )
+
+if (UNSAFE_TREAT_WARNINGS_AS_ERRORS)
+    target_compile_options(${PROJECT_NAME} PRIVATE -Werror )
+endif ()
 
 if(BUILD_TESTING AND BUILD_SHARED_LIBS)
     target_compile_options(${PROJECT_NAME} PRIVATE -fvisibility=default)
@@ -215,9 +268,40 @@ if(S2N_NO_PQ)
     target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_NO_PQ)
 endif()
 
-if(SIKEP434R2_ASM_SUPPORTED)
-    target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_SIKEP434R2_ASM)
-    message(STATUS "Enabling SIKEP434R2 assembly code")
+if(SIKEP434R3_ASM_SUPPORTED)
+    target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_SIKE_P434_R3_ASM)
+    message(STATUS "Enabling SIKEP434R3 assembly code")
+endif()
+
+if(BIKE_R3_X86_64_OPT_SUPPORTED)
+    # If any of the BIKE_R3 x86_64 optimizations is supported (this was checked
+    # earlier in the file), we add the required compile flags to files that
+    # contain the optimized code.
+    if(BIKE_R3_AVX2_SUPPORTED)
+        FILE(GLOB BIKE_R3_AVX2_SRCS "pq-crypto/bike_r3/*_avx2.c")
+        set_source_files_properties(${BIKE_R3_AVX2_SRCS} PROPERTIES COMPILE_FLAGS -mavx2)
+        target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_BIKE_R3_AVX2)
+    endif()
+
+    if(BIKE_R3_AVX512_SUPPORTED)
+        FILE(GLOB BIKE_R3_AVX512_SRCS "pq-crypto/bike_r3/*_avx512.c")
+        set_source_files_properties(${BIKE_R3_AVX512_SRCS} PROPERTIES COMPILE_FLAGS ${BIKE_R3_AVX512_FLAGS})
+        target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_BIKE_R3_AVX512)
+    endif()
+
+    if(BIKE_R3_PCLMUL_SUPPORTED)
+        FILE(GLOB BIKE_R3_PCLMUL_SRCS "pq-crypto/bike_r3/*_pclmul.c")
+        set_source_files_properties(${BIKE_R3_PCLMUL_SRCS} PROPERTIES COMPILE_FLAGS ${BIKE_R3_PCLMUL_FLAGS})
+        target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_BIKE_R3_PCLMUL)
+    endif()
+
+    if(BIKE_R3_VPCLMUL_SUPPORTED)
+        FILE(GLOB BIKE_R3_VPCLMUL_SRCS "pq-crypto/bike_r3/*_vpclmul.c")
+        set_source_files_properties(${BIKE_R3_VPCLMUL_SRCS} PROPERTIES COMPILE_FLAGS ${BIKE_R3_VPCLMUL_FLAGS})
+        target_compile_options(${PROJECT_NAME} PUBLIC -DS2N_BIKE_R3_VPCLMUL)
+    endif()
+
+    message(STATUS "Enabling BIKE_R3 x86_64 optimizations")
 endif()
 
 if(ADX_SUPPORTED)
@@ -258,13 +342,21 @@ endif()
 
 set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules)
 
-find_package(LibCrypto REQUIRED)
-target_link_libraries(${PROJECT_NAME} PUBLIC LibCrypto::Crypto ${OS_LIBS} m)
+if (SEARCH_LIBCRYPTO)
+    find_package(LibCrypto REQUIRED)
+else()
+    if (TARGET crypto)
+        message(STATUS "S2N found target: crypto")
+    else()
+        message(FATAL_ERROR "Target crypto is not defined, failed to find libcrypto")
+    endif()
+endif()
+target_link_libraries(${PROJECT_NAME} PUBLIC crypto ${OS_LIBS} m)
 
 target_include_directories(${PROJECT_NAME} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
 target_include_directories(${PROJECT_NAME} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api> $<INSTALL_INTERFACE:include>)
 
-target_include_directories(${PROJECT_NAME} PRIVATE $<TARGET_PROPERTY:LibCrypto::Crypto,INTERFACE_INCLUDE_DIRECTORIES>)
+target_include_directories(${PROJECT_NAME} PRIVATE $<TARGET_PROPERTY:crypto,INTERFACE_INCLUDE_DIRECTORIES>)
 
 if (BUILD_TESTING)
     enable_testing()
@@ -276,7 +368,7 @@ if (BUILD_TESTING)
     target_include_directories(testss2n PUBLIC tests)
     target_compile_options(testss2n PRIVATE -std=gnu99)
     target_link_libraries(testss2n PUBLIC ${PROJECT_NAME})
-    target_include_directories(testss2n PUBLIC $<TARGET_PROPERTY:LibCrypto::Crypto,INTERFACE_INCLUDE_DIRECTORIES>)
+    target_include_directories(testss2n PUBLIC $<TARGET_PROPERTY:crypto,INTERFACE_INCLUDE_DIRECTORIES>)
 
     #run unit tests
     file (GLOB TEST_LD_PRELOAD "tests/LD_PRELOAD/*.c")
@@ -310,13 +402,13 @@ if (BUILD_TESTING)
 
     add_executable(s2nc "bin/s2nc.c" "bin/echo.c" "bin/https.c" "bin/common.c")
     target_link_libraries(s2nc ${PROJECT_NAME})
-    target_include_directories(s2nc PRIVATE $<TARGET_PROPERTY:LibCrypto::Crypto,INTERFACE_INCLUDE_DIRECTORIES>)
+    target_include_directories(s2nc PRIVATE $<TARGET_PROPERTY:crypto,INTERFACE_INCLUDE_DIRECTORIES>)
     target_include_directories(s2nc PRIVATE api)
     target_compile_options(s2nc PRIVATE -std=gnu99 -D_POSIX_C_SOURCE=200112L)
 
     add_executable(s2nd "bin/s2nd.c" "bin/echo.c" "bin/https.c" "bin/common.c")
     target_link_libraries(s2nd ${PROJECT_NAME})
-    target_include_directories(s2nd PRIVATE $<TARGET_PROPERTY:LibCrypto::Crypto,INTERFACE_INCLUDE_DIRECTORIES>)
+    target_include_directories(s2nd PRIVATE $<TARGET_PROPERTY:crypto,INTERFACE_INCLUDE_DIRECTORIES>)
     target_include_directories(s2nd PRIVATE api)
     target_compile_options(s2nd PRIVATE -std=gnu99 -D_POSIX_C_SOURCE=200112L)
 
@@ -382,4 +474,3 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-config.cmake"
 install(FILES "cmake/modules/FindLibCrypto.cmake"
         DESTINATION "${CMAKE_INSTALL_LIBDIR}/${PROJECT_NAME}/cmake/modules/"
         COMPONENT Development)
-

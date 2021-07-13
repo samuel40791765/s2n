@@ -36,7 +36,8 @@ typedef enum {
     S2N_CERT_ERR_EXPIRED = -3,
     S2N_CERT_ERR_TYPE_UNSUPPORTED = -4,
     S2N_CERT_ERR_INVALID = -5,
-    S2N_CERT_ERR_MAX_CHAIN_DEPTH_EXCEEDED = -6
+    S2N_CERT_ERR_MAX_CHAIN_DEPTH_EXCEEDED = -6,
+    S2N_CERT_ERR_INTERNAL_ERROR = -7
 } s2n_cert_validation_code;
 
 typedef enum {
@@ -130,6 +131,12 @@ s2n_cert_validation_code s2n_x509_validator_validate_cert_chain(struct s2n_x509_
  */
 s2n_cert_validation_code s2n_x509_validator_validate_cert_stapled_ocsp_response(struct s2n_x509_validator *validator,  struct s2n_connection *conn,
                                                                                 const uint8_t *ocsp_response, uint32_t size);
+
+/**
+ * Checks whether the peer's certificate chain has been received and validated.
+ * Should be verified before any use of the peer's certificate data.
+ */
+bool s2n_x509_validator_is_cert_chain_validated(const struct s2n_x509_validator *validator);
 
 /**
  * Validates that each certificate in a peer's cert chain contains only signature algorithms in a security policy's

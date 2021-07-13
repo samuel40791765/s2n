@@ -3,6 +3,8 @@ import re
 import subprocess
 import string
 import threading
+import itertools
+
 
 from constants import TEST_CERT_DIRECTORY
 from global_flags import get_flag, S2N_NO_PQ, S2N_FIPS_MODE
@@ -43,6 +45,9 @@ class AvailablePorts(object):
     """
 
     def __init__(self, low=8000, high=30000):
+        worker_count = int(os.getenv('PYTEST_XDIST_WORKER_COUNT'))
+        chunk_size = int((high - low) / worker_count)
+
         # If xdist is being used, parse the workerid from the envvar. This can
         # be used to allocate unique ports to each worker.
         worker = os.getenv('PYTEST_XDIST_WORKER')
@@ -54,7 +59,11 @@ class AvailablePorts(object):
 
         # This is a naive way to allocate ports, but it allows us to cut
         # the run time in half without workers colliding.
-        self.ports = iter(range(low + (worker_id * 500), high))
+        worker_offset = (worker_id * chunk_size)
+        base_range = range(low + worker_offset, high)
+        wrap_range = range(low, low + worker_offset)
+        self.ports = iter(itertools.chain(base_range, wrap_range))
+
         self.lock = threading.Lock()
 
     def __iter__(self):
@@ -287,7 +296,7 @@ class KemGroups(object):
     # oqs_openssl does not support x25519 based KEM groups
     P256_KYBER512R2 = KemGroup("p256_kyber512")
     P256_BIKE1L1FOR2 = KemGroup("p256_bike1l1fo")
-    P256_SIKEP434R2 = KemGroup("p256_sikep434")
+    P256_SIKEP434R3 = KemGroup("p256_sikep434")
 
 
 class Signature(object):
@@ -359,14 +368,21 @@ class Results(object):
     # Any exception thrown while running the process
     exception = None
 
-    def __init__(self, stdout, stderr, exit_code, exception):
+    def __init__(self, stdout, stderr, exit_code, exception, expect_stderr=False):
         self.stdout = stdout
         self.stderr = stderr
         self.exit_code = exit_code
         self.exception = exception
+        self.expect_stderr = expect_stderr
 
     def __str__(self):
         return "Stdout: {}\nStderr: {}\nExit code: {}\nException: {}".format(self.stdout, self.stderr, self.exit_code, self.exception)
+
+    def assert_success(self):
+        assert self.exception is None
+        assert self.exit_code == 0
+        if not self.expect_stderr:
+            assert not self.stderr
 
 
 class ProviderOptions(object):
@@ -396,6 +412,8 @@ class ProviderOptions(object):
 
         # Hostname
         self.host = host
+        if not self.host:
+            self.host = "localhost"
 
         # Port (string because this will be converted to a command line
         self.port = str(port)

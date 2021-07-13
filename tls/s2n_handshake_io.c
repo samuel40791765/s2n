@@ -807,7 +807,7 @@ int s2n_conn_set_handshake_type(struct s2n_connection *conn)
 
     if (conn->config->use_tickets) {
         if (conn->session_ticket_status == S2N_DECRYPT_TICKET) {
-            if (!s2n_decrypt_session_ticket(conn)) {
+            if (!s2n_decrypt_session_ticket(conn, &conn->client_ticket_to_decrypt)) {
                 return 0;
             }
 
@@ -1062,25 +1062,8 @@ static int s2n_handshake_handle_sslv2(struct s2n_connection *conn)
     /* We're done with the record, wipe it */
     POSIX_GUARD(s2n_stuffer_wipe(&conn->header_in));
     POSIX_GUARD(s2n_stuffer_wipe(&conn->in));
-    if (r < 0) {
-        /* Don't invoke blinding on some of the common errors */
-        switch (s2n_errno) {
-            case S2N_ERR_CANCELLED:
-            case S2N_ERR_CIPHER_NOT_SUPPORTED:
-            case S2N_ERR_PROTOCOL_VERSION_UNSUPPORTED:
-                conn->closed = 1;
-                break;
-            case S2N_ERR_IO_BLOCKED:
-            case S2N_ERR_ASYNC_BLOCKED:
-                /* A blocking condition is retryable, so we should return without killing the connection. */
-                S2N_ERROR_PRESERVE_ERRNO();
-                break;
-            default:
-                POSIX_GUARD(s2n_connection_kill(conn));
-        }
 
-        return r;
-    }
+    WITH_ERROR_BLINDING(conn, POSIX_GUARD(r));
 
     conn->in_status = ENCRYPTED;
 
@@ -1146,9 +1129,7 @@ static int s2n_handshake_read_io(struct s2n_connection *conn)
          *# "early_data" extension, it MUST terminate the connection with a
          *# "bad_record_mac" alert as per Section 5.2.
          */
-        if ((r < 0) && (s2n_errno == S2N_ERR_DECRYPT) /* Decryption Error */
-                && (conn->mode == S2N_SERVER) /* On the server */
-                && (conn->early_data_state == S2N_EARLY_DATA_REJECTED) /* When early data was rejected */) {
+        if ((r < 0) && (s2n_errno == S2N_ERR_EARLY_DATA_TRIAL_DECRYPT)) {
             POSIX_GUARD(s2n_stuffer_reread(&conn->in));
             POSIX_GUARD_RESULT(s2n_early_data_record_bytes(conn, s2n_stuffer_data_available(&conn->in)));
             POSIX_GUARD_RESULT(s2n_wipe_record(conn));
@@ -1251,32 +1232,23 @@ static int s2n_handshake_read_io(struct s2n_connection *conn)
 
         /* Call the relevant handler */
         r = ACTIVE_STATE(conn).handler[conn->mode] (conn);
+        /* At this point we may have already failed.
+         * If the handler fails, we clean up the handshake
+         * and skip processing steps necessary to continue connecting (such as updating the transcript hash.)
+         */
 
         /* Don't update handshake hashes until after the handler has executed since some handlers need to read the
          * hash values before they are updated. */
-        POSIX_GUARD(s2n_handshake_conn_update_hashes(conn));
+        if (r >= S2N_SUCCESS || S2N_ERROR_IS_BLOCKING(s2n_errno)) { /* Only do this if we haven't already failed */
+            POSIX_GUARD(s2n_handshake_conn_update_hashes(conn));
+        }
 
+        /* Wipe regardless of whether or not we are successful. */
         POSIX_GUARD(s2n_stuffer_wipe(&conn->handshake.io));
 
-        if (r < 0) {
-            /* Don't invoke blinding on some of the common errors */
-            switch (s2n_errno) {
-                case S2N_ERR_CANCELLED:
-                case S2N_ERR_CIPHER_NOT_SUPPORTED:
-                case S2N_ERR_PROTOCOL_VERSION_UNSUPPORTED:
-                    conn->closed = 1;
-                    break;
-                case S2N_ERR_IO_BLOCKED:
-                case S2N_ERR_ASYNC_BLOCKED:
-                    /* A blocking condition is retryable, so we should return without killing the connection. */
-                    S2N_ERROR_PRESERVE_ERRNO();
-                    break;
-                default:
-                    POSIX_GUARD(s2n_connection_kill(conn));
-            }
-
-            return r;
-        }
+        /* Bail with blinding if we have failed. */
+        WITH_ERROR_BLINDING(conn, POSIX_GUARD(r));
+        /* At this point we know that we have not failed yet because the prior line would have bailed if we had. */
 
         /* Update the secrets, if necessary */
         POSIX_GUARD(s2n_tls13_handle_secrets(conn));
@@ -1314,23 +1286,20 @@ static int s2n_handle_retry_state(struct s2n_connection *conn)
         conn->in_status = ENCRYPTED;
     }
 
-    if (r < 0) {
-        /* There is some other problem and we should kill the connection. */
-        if (conn->session_id_len) {
-            s2n_try_delete_session_cache(conn);
-        }
-
-        POSIX_GUARD(s2n_connection_kill(conn));
-        S2N_ERROR_PRESERVE_ERRNO();
-    }
-
     if (CONNECTION_IS_WRITER(conn)) {
+        POSIX_GUARD(r);
+
         /* If we're the writer and handler just finished, update the record header if
          * needed and let the s2n_handshake_write_io write the data to the socket */
         if (EXPECTED_RECORD_TYPE(conn) == TLS_HANDSHAKE) {
             POSIX_GUARD(s2n_handshake_finish_header(&conn->handshake.io));
         }
     } else {
+        if (r < 0 && conn->session_id_len) {
+            s2n_try_delete_session_cache(conn);
+        }
+        WITH_ERROR_BLINDING(conn, POSIX_GUARD(r));
+
         /* The read handler processed the record successfully, we are done with this
          * record. Advance the state machine. */
         POSIX_GUARD(s2n_tls13_handle_secrets(conn));
@@ -1412,12 +1381,12 @@ int s2n_negotiate(struct s2n_connection *conn, s2n_blocked_status *blocked)
             }
         }
 
-        /* If the handshake has just ended, free up memory */
         if (ACTIVE_STATE(conn).writer == 'B') {
-            POSIX_GUARD(s2n_stuffer_resize(&conn->handshake.io, 0));
-
             /* Send any pending post-handshake messages */
             POSIX_GUARD(s2n_post_handshake_send(conn, blocked));
+
+            /* If the handshake has just ended, free up memory */
+            POSIX_GUARD(s2n_stuffer_resize(&conn->handshake.io, 0));
         }
     }
 

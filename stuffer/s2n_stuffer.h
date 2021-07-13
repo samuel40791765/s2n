@@ -59,6 +59,7 @@ struct s2n_stuffer {
 #define s2n_stuffer_data_available( s )   ((s)->write_cursor - (s)->read_cursor)
 #define s2n_stuffer_space_remaining( s )  ((s)->blob.size - (s)->write_cursor)
 #define s2n_stuffer_is_wiped( s )         ((s)->high_water_mark == 0)
+#define s2n_stuffer_is_freed( s )         ((s)->blob.data == NULL)
 /* Check basic validity constraints on the stuffer: e.g. that cursors point within the blob */
 extern S2N_RESULT s2n_stuffer_validate(const struct s2n_stuffer* stuffer);
 
@@ -150,6 +151,7 @@ extern int s2n_stuffer_skip_to_char(struct s2n_stuffer *stuffer, char target);
 extern int s2n_stuffer_skip_expected_char(struct s2n_stuffer *stuffer, const char expected, const uint32_t min, const uint32_t max, uint32_t *skipped);
 extern int s2n_stuffer_skip_read_until(struct s2n_stuffer *stuffer, const char* target);
 extern int s2n_stuffer_alloc_ro_from_string(struct s2n_stuffer *stuffer, const char *str);
+extern int s2n_stuffer_init_ro_from_string(struct s2n_stuffer *stuffer, uint8_t *data, uint32_t length);
 
 /* Read a private key from a PEM encoded stuffer to an ASN1/DER encoded one */
 extern int s2n_stuffer_private_key_from_pem(struct s2n_stuffer *pem, struct s2n_stuffer *asn1);
